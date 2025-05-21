@@ -1,0 +1,47 @@
+# gcloud builds submit --config cloudbuild.yaml .
+
+steps:
+  # Build the Go application Docker image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "build",
+        "-t",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-be",
+        ".",
+      ]
+
+  # Configure Docker to use gcloud for authentication
+  - name: "gcr.io/cloud-builders/gcloud"
+    args: ["auth", "configure-docker", "--quiet"]
+
+  # Push the Node application Docker image to Google Artifact Registry
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "push",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-be",
+      ]
+
+  # Deploy the Node application using Cloud Run
+  - name: "gcr.io/cloud-builders/gcloud"
+    args:
+      [
+        "run",
+        "deploy",
+        "card-capture-api",
+        "--image",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-be",
+        "--platform",
+        "managed",
+        "--region",
+        "us-central1",
+        "--allow-unauthenticated",
+      ]
+
+images:
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-be"
+
+#required
+options:
+  logging: CLOUD_LOGGING_ONLY
