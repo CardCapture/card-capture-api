@@ -7,5 +7,4 @@ python-dotenv==1.0.0
 python-magic==0.4.27
 supabase==1.2.0
 pillow==10.0.1
-fastapi==0.104.1
 pydantic==2.4.2 

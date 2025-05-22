@@ -177,17 +177,15 @@ def process_job(job):
         if tmp_file and os.path.exists(tmp_file):
             os.remove(tmp_file)
 
-# HTTP Trigger
+# HTTP Trigger for Cloud Functions Gen1
 @functions_framework.http
 def process_card_http(request):
     """HTTP Cloud Function that processes a card image.
     Args:
         request (flask.Request): The request object.
-        <https://flask.palletsprojects.com/en/1.1.x/api/#incoming-request-data>
     Returns:
         The response text, or any set of values that can be turned into a
-        Response object using `make_response`
-        <https://flask.palletsprojects.com/en/1.1.x/api/#flask.make_response>.
+        Response object using `make_response`.
     """
     request_json = request.get_json(silent=True)
     
