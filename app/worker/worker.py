@@ -1,9 +1,10 @@
 import os
-import time
 import tempfile
 import traceback
 import json
 from datetime import datetime, timezone
+from fastapi import FastAPI, HTTPException, Request
+import uvicorn
 from app.services.document_service import parse_card_with_gemini
 # from app.services.gemini_service import run_gemini_review
 from app.repositories.processing_jobs_repository import update_processing_job
@@ -14,7 +15,8 @@ from app.repositories.upload_notifications_repository import insert_upload_notif
 
 BUCKET = "cards-uploads"
 MAX_RETRIES = 3
-SLEEP_SECONDS = 1
+
+app = FastAPI(title="CardCapture Worker API")
 
 def download_from_supabase(storage_path, local_path):
     res = supabase_client.storage.from_(BUCKET).download(storage_path.replace(f"{BUCKET}/", ""))
@@ -154,6 +156,7 @@ def process_job(job):
             "error_message": None
         })
         print(f"Job {job_id} complete.")
+        return {"status": "success", "job_id": job_id}
     except Exception as e:
         print(f"Error processing job {job_id}: {e}")
         traceback.print_exc()
@@ -167,6 +170,7 @@ def process_job(job):
                 "retries": retries
             })
             print(f"Job {job_id} re-queued (retry {retries}).")
+            return {"status": "retrying", "job_id": job_id, "retry": retries}
         else:
             update_processing_job(supabase_client, job_id, {
                 "status": "failed",
@@ -174,29 +178,51 @@ def process_job(job):
                 "updated_at": now
             })
             print(f"Job {job_id} failed after {MAX_RETRIES} retries.")
+            return {"status": "failed", "job_id": job_id, "error": str(e)}
     finally:
         if tmp_file and os.path.exists(tmp_file):
             os.remove(tmp_file)
 
-def main():
-    print("Starting CardCapture processing worker...")
-    while True:
-        try:
-            jobs = supabase_client.table("processing_jobs").select("*").eq("status", "queued").order("created_at").limit(1).execute()
-            if jobs.data and len(jobs.data) > 0:
-                job = jobs.data[0]
-                now = datetime.now(timezone.utc).isoformat()
-                update_processing_job(supabase_client, job["id"], {
-                    "status": "processing",
-                    "updated_at": now
-                })
-                process_job(job)
-            else:
-                time.sleep(SLEEP_SECONDS)
-        except Exception as e:
-            print(f"Worker error: {e}")
-            traceback.print_exc()
-            time.sleep(SLEEP_SECONDS)
+@app.get("/")
+def root():
+    return {"message": "CardCapture Worker API is running"}
+
+@app.post("/process")
+async def process_job_endpoint(request: Request):
+    try:
+        data = await request.json()
+        
+        # Check if job_id is provided
+        if not data or "job_id" not in data:
+            raise HTTPException(status_code=400, detail="Missing job_id in request")
+        
+        job_id = data["job_id"]
+        
+        # Fetch the job details from Supabase
+        job_query = supabase_client.table("processing_jobs").select("*").eq("id", job_id).maybe_single().execute()
+        
+        if not job_query.data:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            
+        job = job_query.data
+        
+        # Update status to processing
+        now = datetime.now(timezone.utc).isoformat()
+        update_processing_job(supabase_client, job_id, {
+            "status": "processing",
+            "updated_at": now
+        })
+        
+        # Process the job
+        result = process_job(job)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in process_job_endpoint: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    main() 
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port) 
