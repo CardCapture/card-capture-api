@@ -48,7 +48,6 @@ steps:
         "functions",
         "deploy",
         "card-capture-processor",
-        "--gen1",
         "--runtime=python311",
         "--region=us-central1",
         "--source=./functions",
