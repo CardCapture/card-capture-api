@@ -254,4 +254,15 @@ def process_card_pubsub(cloud_event):
     
     # Process the job
     result = process_job(job)
-    print(f"Processing result: {result}") 
+    print(f"Processing result: {result}")
+
+# This is only used when running locally
+if __name__ == "__main__":
+    # This is used when running locally. Gunicorn is used to run the
+    # application on Cloud Run. See entrypoint in Dockerfile.
+    import os
+    from functions_framework import create_app
+
+    port = int(os.environ.get("PORT", 8080))
+    app = create_app(target=process_card_http, debug=True)
+    app.run(host="0.0.0.0", port=port) 
