@@ -1,13 +1,15 @@
 # gcloud builds submit --config cloudbuild.yaml .
 
 steps:
-  # Build the Go application Docker image
+  # Build the FastAPI Docker image
   - name: "gcr.io/cloud-builders/docker"
     args:
       [
         "build",
         "-t",
         "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-be",
+        "-f",
+        "Dockerfile",
         ".",
       ]
 
@@ -15,7 +17,7 @@ steps:
   - name: "gcr.io/cloud-builders/gcloud"
     args: ["auth", "configure-docker", "--quiet"]
 
-  # Push the Node application Docker image to Google Artifact Registry
+  # Push the FastAPI Docker image to Google Artifact Registry
   - name: "gcr.io/cloud-builders/docker"
     args:
       [
@@ -23,7 +25,7 @@ steps:
         "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-be",
       ]
 
-  # Deploy the Node application using Cloud Run
+  # Deploy the FastAPI application using Cloud Run
   - name: "gcr.io/cloud-builders/gcloud"
     args:
       [
@@ -37,6 +39,26 @@ steps:
         "--region",
         "us-central1",
         "--allow-unauthenticated",
+      ]
+
+  # Deploy the Cloud Function for card processing (replaces the worker Docker container)
+  - name: "gcr.io/cloud-builders/gcloud"
+    args:
+      [
+        "functions",
+        "deploy",
+        "card-capture-processor",
+        "--gen2",
+        "--runtime=python311",
+        "--region=us-central1",
+        "--source=./functions",
+        "--entry-point=process_card_http",
+        "--trigger-http",
+        "--allow-unauthenticated",
+        "--timeout=540s",
+        "--memory=2048MB",
+        "--min-instances=0",
+        "--set-env-vars=PROJECT_ID=$PROJECT_ID",
       ]
 
 images:

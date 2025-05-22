@@ -1,0 +1,26 @@
+# gcloud builds submit --config build/cloudbuild-function.yaml .
+
+steps:
+  # Deploy the Cloud Function for card processing
+  - name: "gcr.io/cloud-builders/gcloud"
+    args:
+      [
+        "functions",
+        "deploy",
+        "card-capture-processor",
+        "--gen2",
+        "--runtime=python311",
+        "--region=us-central1",
+        "--source=./functions",
+        "--entry-point=process_card_http",
+        "--trigger-http",
+        "--allow-unauthenticated",
+        "--timeout=540s",
+        "--memory=2048MB",
+        "--min-instances=0",
+        "--max-instances=10",
+        "--set-env-vars=PROJECT_ID=$PROJECT_ID",
+      ]
+
+options:
+  logging: CLOUD_LOGGING_ONLY
