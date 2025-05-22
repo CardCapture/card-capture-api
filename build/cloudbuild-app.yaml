@@ -13,6 +13,18 @@ steps:
         ".",
       ]
 
+  # Build the Worker Docker image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "build",
+        "-t",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-worker",
+        "-f",
+        "Dockerfile.worker",
+        ".",
+      ]
+
   # Configure Docker to use gcloud for authentication
   - name: "gcr.io/cloud-builders/gcloud"
     args: ["auth", "configure-docker", "--quiet"]
@@ -23,6 +35,14 @@ steps:
       [
         "push",
         "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-be",
+      ]
+
+  # Push the Worker Docker image to Google Artifact Registry
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "push",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-worker",
       ]
 
   # Deploy the FastAPI application using Cloud Run
@@ -41,27 +61,27 @@ steps:
         "--allow-unauthenticated",
       ]
 
-  # Deploy the Cloud Function for card processing (replaces the worker Docker container)
+  # Deploy the Worker application using Cloud Run
   - name: "gcr.io/cloud-builders/gcloud"
     args:
       [
-        "functions",
+        "run",
         "deploy",
-        "card-capture-processor",
-        "--runtime=python311",
-        "--region=us-central1",
-        "--source=./functions",
-        "--entry-point=process_card_http",
-        "--trigger-http",
-        "--allow-unauthenticated",
-        "--timeout=540s",
-        "--memory=2048MB",
-        "--min-instances=0",
-        "--set-env-vars=PROJECT_ID=$PROJECT_ID",
+        "card-capture-worker",
+        "--image",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-worker",
+        "--platform",
+        "managed",
+        "--region",
+        "us-central1",
+        "--timeout=3600s",
+        "--cpu=1",
+        "--memory=2048Mi",
       ]
 
 images:
   - "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-be"
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/card-capture-worker"
 
 #required
 options:
