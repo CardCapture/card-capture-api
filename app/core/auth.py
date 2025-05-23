@@ -9,10 +9,12 @@ def log(msg):
 
 async def get_current_user(request: Request):
     auth_header = request.headers.get("Authorization")
+    print(f"🔍 Auth header: {auth_header}")
     if not auth_header or not auth_header.startswith("Bearer "):
         log("❌ Missing or invalid Authorization header")
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     token = auth_header.split(" ", 1)[1]
+    print(f"🔍 Token: {token}")
     try:
         payload = jwt.decode(
             token,
@@ -28,7 +30,8 @@ async def get_current_user(request: Request):
         profile = get_user_profile_db(supabase_client, user_id)
         log(f"✅ Authenticated user_id: {user_id}")
         return profile
-    except JWTError:
+    except JWTError as e:
+        log(f"❌ JWTError: {e}")
         log("❌ Invalid or expired token")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     except Exception as e:
