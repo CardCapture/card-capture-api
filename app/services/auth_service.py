@@ -20,6 +20,7 @@ async def read_current_user_service(request: Request):
         print("❌ Missing or invalid Authorization header")
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     token = auth_header.split(" ", 1)[1]
+    print(f"🔍 Token: {token}")
     try:
         payload = jwt.decode(
             token,
@@ -28,6 +29,7 @@ async def read_current_user_service(request: Request):
             audience=os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
         )
         user_id = payload.get("sub")
+        print(f"🔍 User ID: {user_id}")
         if not user_id:
             print("❌ User ID not found in token")
             raise HTTPException(status_code=400, detail="User ID not found in token")
