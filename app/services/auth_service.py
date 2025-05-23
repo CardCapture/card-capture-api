@@ -38,6 +38,7 @@ async def read_current_user_service(request: Request):
         print(f"✅ User profile fetched for user_id: {user_id}")
         return {"profile": profile}
     except JWTError as e:
+        print(f"❌ JWTError: {e}")
         print("❌ Invalid or expired token")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     except Exception as e:
