@@ -1,4 +1,5 @@
 import os
+import numpy as np
 from PIL import Image, ExifTags, ImageOps
 from google.cloud import documentai_v1 as documentai
 from app.config import PROJECT_ID, DOCAI_LOCATION, DOCAI_PROCESSOR_ID, TRIMMED_FOLDER
@@ -65,10 +66,99 @@ def trim_image_with_docai(input_path: str, output_path: str = None, percent_expa
         print(f"[DocAI] Error in trim_image_with_docai: {e}")
         return input_path
 
-def ensure_vertical_orientation(image_path: str) -> str:
+def detect_card_boundaries(image_path: str, padding: int = 20) -> tuple:
     """
-    Properly handle EXIF orientation using Pillow's modern ImageOps method,
-    then ensure the image is in portrait orientation.
+    Detect the actual card boundaries by finding non-white content areas.
+    This works universally for any card format as it detects content vs background.
+    
+    Args:
+        image_path: Path to the image file
+        padding: Additional padding to add around detected content (default: 20 pixels)
+        
+    Returns:
+        Tuple of (left, top, right, bottom) coordinates or None if detection fails
+    """
+    try:
+        # Convert image to grayscale for content detection
+        img = Image.open(image_path).convert('L')
+        img_array = np.array(img)
+        
+        # Find non-white areas (content areas vs background)
+        # Use threshold to identify areas that aren't pure white/near-white
+        non_white = img_array < 240  # Adjust threshold as needed
+        
+        # Find the bounding box of all non-white content
+        rows = np.any(non_white, axis=1)
+        cols = np.any(non_white, axis=0)
+        
+        if not np.any(rows) or not np.any(cols):
+            print("[CardBoundary] No content detected - image might be blank or all white")
+            return None
+            
+        # Get the first and last rows/columns with content
+        top, bottom = np.where(rows)[0][[0, -1]]
+        left, right = np.where(cols)[0][[0, -1]]
+        
+        # Add padding to ensure we don't clip content at edges
+        left = max(0, left - padding)
+        top = max(0, top - padding)
+        right = min(img.width, right + padding)
+        bottom = min(img.height, bottom + padding)
+        
+        print(f"[CardBoundary] Detected card boundaries: ({left}, {top}) to ({right}, {bottom})")
+        print(f"[CardBoundary] Card size: {right - left} x {bottom - top}")
+        
+        return (left, top, right, bottom)
+        
+    except Exception as e:
+        print(f"[CardBoundary] Error in boundary detection: {e}")
+        return None
+
+def trim_image_with_boundary_detection(input_path: str, output_path: str = None) -> str:
+    """
+    Trim image using card boundary detection - finds actual content boundaries.
+    This is more accurate than field-based detection as it captures the entire card.
+    
+    Args:
+        input_path: Path to input image
+        output_path: Path for output image (auto-generated if None)
+        
+    Returns:
+        Path to trimmed image, or input_path if trimming fails
+    """
+    try:
+        # Set up output path
+        if not output_path:
+            filename = os.path.basename(input_path)
+            name, ext = os.path.splitext(filename)
+            output_path = os.path.join(TRIMMED_FOLDER, f"{name}_trimmed{ext}")
+        
+        # Detect card boundaries
+        boundaries = detect_card_boundaries(input_path)
+        if not boundaries:
+            print("[CardBoundary] Boundary detection failed - returning original image")
+            return input_path
+        
+        # Crop image to detected boundaries
+        img = Image.open(input_path)
+        left, top, right, bottom = boundaries
+        cropped_img = img.crop((left, top, right, bottom))
+        
+        # Ensure output directory exists and save
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        cropped_img.save(output_path)
+        
+        print(f"[CardBoundary] Cropped image saved to {output_path}")
+        return output_path
+        
+    except Exception as e:
+        print(f"[CardBoundary] Error in trim_image_with_boundary_detection: {e}")
+        return input_path
+
+def ensure_proper_orientation(image_path: str) -> str:
+    """
+    Properly handle EXIF orientation and prepare image for processing.
+    No longer forces vertical orientation - respects the card's natural layout.
     """
     img = Image.open(image_path)
     
@@ -76,34 +166,48 @@ def ensure_vertical_orientation(image_path: str) -> str:
     img = ImageOps.exif_transpose(img)
     print(f"✅ EXIF orientation applied successfully")
     
-    # Force portrait orientation (like the original function did)
-    # This ensures compatibility with DocAI processing expectations
-    if img.width > img.height:
-        img = img.rotate(90, expand=True)
-        print(f"✅ Additional rotation applied to ensure portrait orientation")
+    # Check if this appears to be a horizontal card format
+    aspect_ratio = img.width / img.height
+    if aspect_ratio > 1.5:  # Clearly horizontal card
+        print(f"📐 Detected horizontal card format (aspect ratio: {aspect_ratio:.2f}) - preserving orientation")
+    elif aspect_ratio < 0.7:  # Clearly vertical card
+        print(f"📐 Detected vertical card format (aspect ratio: {aspect_ratio:.2f}) - preserving orientation")
+    else:
+        print(f"📐 Square/ambiguous format (aspect ratio: {aspect_ratio:.2f}) - preserving original orientation")
     
     # Convert to RGB if needed
     if img.mode in ('RGBA', 'LA', 'P'):
         img = img.convert('RGB')
         
-    # Save processed image
-    rotated_path = image_path.replace('.', '_vertical.', 1)
-    img.save(rotated_path, format='JPEG', quality=100, optimize=True)
-    print(f"✅ Processed image saved to: {rotated_path}")
+    # Save processed image with corrected path construction
+    base_path, ext = os.path.splitext(image_path)
+    processed_path = f"{base_path}_processed{ext}"
+    img.save(processed_path, format='JPEG', quality=100, optimize=True)
+    print(f"✅ Processed image saved to: {processed_path}")
     
-    return rotated_path
+    return processed_path
 
 def ensure_trimmed_image(original_image_path: str) -> str:
     print(f"🔄 Processing image: {original_image_path}")
     try:
-        # Ensure vertical orientation first
-        vertical_path = ensure_vertical_orientation(original_image_path)
+        # Ensure proper orientation (EXIF handling, no forced rotation)
+        processed_path = ensure_proper_orientation(original_image_path)
         
-        # Open image with high quality settings
-        img = Image.open(vertical_path)
+        # Try card boundary detection first (universal method for all card formats)
+        print(f"🎯 Attempting card boundary detection...")
+        trimmed_path = trim_image_with_boundary_detection(processed_path)
         
-        # Save with high quality
-        trimmed_path = trim_image_with_docai(vertical_path, percent_expand=0.30)
+        # If boundary detection returns the original path, it failed - try DocAI fallback
+        if trimmed_path == processed_path:
+            print(f"⚠️ Card boundary detection failed, falling back to DocAI field detection...")
+            trimmed_path = trim_image_with_docai(processed_path, percent_expand=0.80)  # Higher expansion for better coverage
+            
+            # If DocAI also fails, return original
+            if trimmed_path == processed_path:
+                print(f"⚠️ Both trimming methods failed, returning original image")
+                return original_image_path
+        
+        # Verify the trimmed file exists
         if not os.path.exists(trimmed_path):
             print(f"⚠️ Trimmed image not found at: {trimmed_path}")
             return original_image_path
