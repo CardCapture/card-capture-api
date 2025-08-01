@@ -103,7 +103,12 @@ def validate_and_enhance_address(fields: Dict[str, Any]) -> Dict[str, Any]:
                 zip_code
             )
             
-            if validated_address and _should_enhance_field(fields.get('address', {}), validated_address):
+            # Check if we got a valid street address (not just area info)
+            has_street_address = (validated_address and 
+                                ('street_address' in validated_address or 
+                                 ('street_number' in validated_address and 'street_name' in validated_address)))
+            
+            if has_street_address and _should_enhance_field(fields.get('address', {}), validated_address):
                 log_debug(f"Enhancing address: '{address}' -> '{validated_address}'", service="address")
                 fields['address'] = _create_enhanced_field(
                     validated_address,
@@ -113,30 +118,50 @@ def validate_and_enhance_address(fields: Dict[str, Any]) -> Dict[str, Any]:
                 # Clear review flag since we validated it
                 fields['address']['requires_human_review'] = False
                 fields['address']['review_notes'] = ""
+                
+                # Sync corrected components (city, state, zip) from Google Maps back to individual fields
+                _sync_corrected_components(fields, validated_address, city, state, zip_code)
             elif address:
                 # We have an address but Google Maps couldn't validate it
                 log_debug(f"Address '{address}' could not be validated by Google Maps", service="address")
+                
+                # Try smart address validation as a fallback
+                smart_result = _try_smart_address_validation(
+                    address, 
+                    city or (zip_validation.get('city', '') if zip_validation else ''),
+                    state or (zip_validation.get('state', '') if zip_validation else ''),
+                    zip_code,
+                    fields
+                )
+                
+                if not smart_result and 'address' in fields and fields['address'].get('required', False):
+                    fields['address']['requires_human_review'] = True
+                    fields['address']['review_notes'] = "Required address field could not be validated by Google Maps or smart validation"
+                    fields['address']['review_confidence'] = 0.3
+        except Exception as e:
+            log_debug(f"Google Maps validation failed: {str(e)}", service="address")
+            
+            # Try smart address validation as a fallback if we have an address
+            if address:
+                smart_result = _try_smart_address_validation(
+                    address,
+                    city or (zip_validation.get('city', '') if 'zip_validation' in locals() and zip_validation else ''),
+                    state or (zip_validation.get('state', '') if 'zip_validation' in locals() and zip_validation else ''),
+                    zip_code,
+                    fields
+                )
+                
+                if not smart_result and 'address' in fields and fields['address'].get('required', False):
+                    fields['address']['requires_human_review'] = True
+                    fields['address']['review_notes'] = "Required address field could not be validated by Google Maps or smart validation"
+                    fields['address']['review_confidence'] = 0.3
+            else:
+                # If validation failed and address is required, mark it for review
                 if 'address' in fields and fields['address'].get('required', False):
                     fields['address']['requires_human_review'] = True
                     fields['address']['review_notes'] = "Required address field could not be validated by Google Maps"
                     fields['address']['review_confidence'] = 0.3
-            # Update the address field with the validated street address from Google Maps
-            if validated_address and 'street_address' in validated_address:
-                log_debug(f"Updating address with validated street address: '{validated_address['street_address']}'", service="address")
-                fields['address'] = _create_enhanced_field(
-                    validated_address['street_address'],
-                    "address_validation",
-                    "Address validated from Google Maps"
-                )
-                fields['address']['requires_human_review'] = False
-                fields['address']['review_notes'] = ""
-        except Exception as e:
-            log_debug(f"Google Maps validation failed: {str(e)}", service="address")
-            # If validation failed and address is required, mark it for review
-            if 'address' in fields and fields['address'].get('required', False):
-                fields['address']['requires_human_review'] = True
-                fields['address']['review_notes'] = "Required address field could not be validated by Google Maps"
-                fields['address']['review_confidence'] = 0.3
+            
             _mark_address_fields_for_review_if_missing(fields)
             # Also check for obviously invalid addresses
             _check_for_invalid_addresses(fields)
@@ -180,6 +205,70 @@ def _should_enhance_field(current_field: Dict[str, Any], new_value: str) -> bool
         
     # Don't enhance if we have good data
     return False
+
+def _sync_corrected_components(fields: Dict[str, Any], validated_address: Dict[str, Any], 
+                               original_city: str, original_state: str, original_zip: str) -> None:
+    """
+    Sync corrected address components from Google Maps back to individual fields.
+    This ensures consistency when Google Maps corrects typos in city, state, or ZIP.
+    
+    Args:
+        fields: The fields dictionary to update
+        validated_address: Google Maps validation result containing corrected components
+        original_city: Original city value before validation
+        original_state: Original state value before validation  
+        original_zip: Original ZIP value before validation
+    """
+    log_debug("Syncing corrected components from Google Maps", {
+        "original": {"city": original_city, "state": original_state, "zip": original_zip},
+        "corrected": {
+            "city": validated_address.get('city'),
+            "state": validated_address.get('state'), 
+            "zip": validated_address.get('zip')
+        }
+    }, service="address")
+    
+    # Sync corrected city if Google Maps provided one and it's different from current field value
+    if 'city' in validated_address and validated_address['city']:
+        corrected_city = validated_address['city']
+        current_city = fields.get('city', {}).get('value', '')
+        if corrected_city != current_city:
+            log_debug(f"Syncing corrected city: '{current_city}' -> '{corrected_city}' (was originally '{original_city}')", service="address")
+            original_city_field = fields.get('city', {})
+            fields['city'] = _create_enhanced_field(
+                corrected_city,
+                "google_maps_correction",
+                f"City corrected by Google Maps to '{corrected_city}'",
+                preserve_field_requirements=original_city_field
+            )
+    
+    # Sync corrected state if Google Maps provided one and it's different from current field value
+    if 'state' in validated_address and validated_address['state']:
+        corrected_state = validated_address['state']
+        current_state = fields.get('state', {}).get('value', '')
+        if corrected_state != current_state:
+            log_debug(f"Syncing corrected state: '{current_state}' -> '{corrected_state}' (was originally '{original_state}')", service="address")
+            original_state_field = fields.get('state', {})
+            fields['state'] = _create_enhanced_field(
+                corrected_state,
+                "google_maps_correction",
+                f"State corrected by Google Maps to '{corrected_state}'",
+                preserve_field_requirements=original_state_field
+            )
+    
+    # Sync corrected ZIP if Google Maps provided one and it's different from current field value
+    if 'zip' in validated_address and validated_address['zip']:
+        corrected_zip = validated_address['zip']
+        current_zip = fields.get('zip_code', {}).get('value', '')
+        if corrected_zip != current_zip:
+            log_debug(f"Syncing corrected ZIP: '{current_zip}' -> '{corrected_zip}' (was originally '{original_zip}')", service="address")
+            original_zip_field = fields.get('zip_code', {})
+            fields['zip_code'] = _create_enhanced_field(
+                corrected_zip,
+                "google_maps_correction",
+                f"ZIP code corrected by Google Maps to '{corrected_zip}'",
+                preserve_field_requirements=original_zip_field
+            )
 
 def _create_enhanced_field(value: str, source: str, notes: str, preserve_field_requirements: Dict[str, Any] = None) -> Dict[str, Any]:
     """
@@ -284,12 +373,16 @@ def _check_for_invalid_addresses(fields: Dict[str, Any]) -> None:
     # Check for incomplete addresses missing street numbers
     import re
     
-    # Look for street number at the beginning of the address
+    # Look for street number at the beginning OR end of the address
     # Street number patterns: digits (possibly followed by letter like 123A)
-    street_number_pattern = r'^\s*\d+[A-Za-z]?\s+'
+    street_number_start = r'^\s*\d+[A-Za-z]?\s+'  # Number at start: "1234 Main St"
+    street_number_end = r'\s+\d+[A-Za-z]?\s*$'    # Number at end: "Main St 1234"
     
-    if not re.match(street_number_pattern, address_value):
-        # No street number found - this is likely an incomplete address
+    has_street_number = (re.search(street_number_start, address_value) or 
+                        re.search(street_number_end, address_value))
+    
+    if not has_street_number:
+        # No street number found anywhere - this is likely an incomplete address
         address_field['requires_human_review'] = True
         address_field['review_notes'] = f"Address appears incomplete - missing street number: '{address_value}'"
         address_field['review_confidence'] = 0.3
@@ -359,4 +452,142 @@ def validate_address_with_google_maps(address: str, city: str, state: str, zip_c
             "is_valid": False,
             "error": f"Google Maps API error: {str(e)}",
             "confidence": "unknown"
-        } 
+        }
+
+
+def _try_smart_address_validation(address: str, city: str, state: str, zip_code: str, fields: Dict[str, Any]) -> bool:
+    """
+    Try smart address validation as a fallback when regular validation fails
+    
+    Args:
+        address: Street address to validate
+        city: City name
+        state: State abbreviation
+        zip_code: ZIP code
+        fields: Field data dictionary to update
+        
+    Returns:
+        True if smart validation succeeded and updated the fields, False otherwise
+    """
+    try:
+        # Import the smart validation function
+        from app.services.smart_address_service import smart_address_validation
+        
+        log_debug("Attempting smart address validation", {
+            "address": address,
+            "city": city,
+            "state": state,
+            "zip_code": zip_code
+        }, service="address")
+        
+        # Run smart validation
+        smart_result = smart_address_validation(address, city, state, zip_code)
+        
+        if smart_result.get('is_valid') and smart_result.get('correction_made'):
+            # Smart validation found a correction
+            corrected_address = smart_result.get('corrected_address')
+            confidence = smart_result.get('confidence')
+            auto_correct = smart_result.get('auto_correct', False)
+            similarity_score = smart_result.get('similarity_score', 0)
+            
+            log_debug("Smart validation successful", {
+                "original": address,
+                "corrected": corrected_address,
+                "confidence": confidence,
+                "auto_correct": auto_correct,
+                "similarity_score": similarity_score
+            }, service="address")
+            
+            # Update the address field
+            if 'address' in fields:
+                fields['address']['value'] = corrected_address
+                fields['address']['source'] = "smart_validation"
+                fields['address']['notes'] = f"Smart corrected from '{address}' (confidence: {confidence})"
+                
+                if auto_correct:
+                    # High confidence - auto-correct without review
+                    fields['address']['requires_human_review'] = False
+                    fields['address']['review_notes'] = f"Auto-corrected: {address} → {corrected_address}"
+                    fields['address']['review_confidence'] = similarity_score
+                else:
+                    # Medium confidence - suggest correction for review
+                    fields['address']['requires_human_review'] = True
+                    fields['address']['review_notes'] = f"Suggested correction: {address} → {corrected_address} (confidence: {confidence})"
+                    fields['address']['review_confidence'] = similarity_score
+                    
+                    # Store the suggestion for the UI
+                    fields['address']['suggested_value'] = corrected_address
+                    fields['address']['suggestion_confidence'] = confidence
+            
+            # Handle corrected ZIP code if smart validation found one
+            if 'corrected_zip' in smart_result and smart_result['corrected_zip']:
+                corrected_zip = smart_result['corrected_zip']
+                original_zip_field = fields.get('zip_code', {})
+                
+                log_debug(f"Smart validation found correct ZIP: '{zip_code}' -> '{corrected_zip}'", service="address")
+                
+                fields['zip_code'] = _create_enhanced_field(
+                    corrected_zip,
+                    "smart_validation_zip_correction",
+                    f"ZIP code corrected by smart validation from '{zip_code}' to '{corrected_zip}'",
+                    preserve_field_requirements=original_zip_field
+                )
+            
+            # Handle corrected city if smart validation found one
+            if 'corrected_city' in smart_result and smart_result['corrected_city']:
+                corrected_city = smart_result['corrected_city']
+                current_city = fields.get('city', {}).get('value', '')
+                
+                if corrected_city != current_city:
+                    log_debug(f"Smart validation found correct city: '{current_city}' -> '{corrected_city}'", service="address")
+                    original_city_field = fields.get('city', {})
+                    
+                    fields['city'] = _create_enhanced_field(
+                        corrected_city,
+                        "smart_validation_city_correction",
+                        f"City corrected by smart validation to '{corrected_city}'",
+                        preserve_field_requirements=original_city_field
+                    )
+            
+            # Handle corrected state if smart validation found one
+            if 'corrected_state' in smart_result and smart_result['corrected_state']:
+                corrected_state = smart_result['corrected_state']
+                current_state = fields.get('state', {}).get('value', '')
+                
+                if corrected_state != current_state:
+                    log_debug(f"Smart validation found correct state: '{current_state}' -> '{corrected_state}'", service="address")
+                    original_state_field = fields.get('state', {})
+                    
+                    fields['state'] = _create_enhanced_field(
+                        corrected_state,
+                        "smart_validation_state_correction",
+                        f"State corrected by smart validation to '{corrected_state}'",
+                        preserve_field_requirements=original_state_field
+                    )
+            
+            return True
+            
+        elif smart_result.get('is_valid') and not smart_result.get('correction_made'):
+            # Smart validation confirmed the address is valid (exact match found)
+            log_debug("Smart validation confirmed address is valid", {"address": address}, service="address")
+            
+            if 'address' in fields:
+                fields['address']['requires_human_review'] = False
+                fields['address']['review_notes'] = "Address confirmed valid by smart validation"
+                fields['address']['source'] = "smart_validation"
+            
+            return True
+            
+        else:
+            # Smart validation also failed
+            log_debug("Smart validation failed", {
+                "address": address,
+                "error": smart_result.get('error', 'Unknown error'),
+                "method": smart_result.get('method', 'unknown')
+            }, service="address")
+            
+            return False
+            
+    except Exception as e:
+        log_debug(f"Smart address validation failed with exception: {e}", service="address")
+        return False 
