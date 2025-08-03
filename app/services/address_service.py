@@ -61,11 +61,13 @@ def validate_and_enhance_address(fields: Dict[str, Any]) -> Dict[str, Any]:
         log_debug("Address was flagged as invalid, skipping Google validation", service="address")
         return fields
     
-    # Only proceed with Google Maps validation if we have a zip code
-    if zip_code:
+    # Try Google Maps validation if we have zip code OR if we have address+city+state (to auto-fill missing zip)
+    if zip_code or (address and city and state):
         try:
-            # First try zip code validation to get city and state
-            zip_validation = validate_zip_code(zip_code)
+            # First try zip code validation to get city and state (only if we have a zip code)
+            zip_validation = None
+            if zip_code:
+                zip_validation = validate_zip_code(zip_code)
             if zip_validation:
                 # Enhance city if missing or low confidence
                 if 'city' in zip_validation and _should_enhance_field(fields.get('city', {}), zip_validation['city']):
@@ -121,6 +123,20 @@ def validate_and_enhance_address(fields: Dict[str, Any]) -> Dict[str, Any]:
                 
                 # Sync corrected components (city, state, zip) from Google Maps back to individual fields
                 _sync_corrected_components(fields, validated_address, city, state, zip_code)
+                
+                # If zip code was missing but Google Maps found one, update the zip_code field
+                if not zip_code and 'zip' in validated_address and validated_address['zip']:
+                    log_debug(f"Auto-filling missing zip code: {validated_address['zip']}", service="address")
+                    original_zip_field = fields.get('zip_code', {})
+                    fields['zip_code'] = _create_enhanced_field(
+                        validated_address['zip'],
+                        "google_maps_autofill",
+                        f"ZIP code auto-filled by Google Maps: {validated_address['zip']}",
+                        preserve_field_requirements=original_zip_field
+                    )
+                    # Clear review flag since we auto-filled it
+                    fields['zip_code']['requires_human_review'] = False
+                    fields['zip_code']['review_notes'] = ""
             elif address:
                 # We have an address but Google Maps couldn't validate it
                 log_debug(f"Address '{address}' could not be validated by Google Maps", service="address")
