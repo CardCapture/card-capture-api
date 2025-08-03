@@ -141,19 +141,27 @@ def validate_and_enhance_address(fields: Dict[str, Any]) -> Dict[str, Any]:
                 # We have an address but Google Maps couldn't validate it
                 log_debug(f"Address '{address}' could not be validated by Google Maps", service="address")
                 
-                # Try smart address validation as a fallback
-                smart_result = _try_smart_address_validation(
-                    address, 
-                    city or (zip_validation.get('city', '') if zip_validation else ''),
-                    state or (zip_validation.get('state', '') if zip_validation else ''),
-                    zip_code,
-                    fields
-                )
-                
-                if not smart_result and 'address' in fields and fields['address'].get('required', False):
-                    fields['address']['requires_human_review'] = True
-                    fields['address']['review_notes'] = "Required address field could not be validated by Google Maps or smart validation"
-                    fields['address']['review_confidence'] = 0.3
+                # Try smart address validation as a fallback only if we have a zip code
+                if zip_code:
+                    smart_result = _try_smart_address_validation(
+                        address, 
+                        city or (zip_validation.get('city', '') if zip_validation else ''),
+                        state or (zip_validation.get('state', '') if zip_validation else ''),
+                        zip_code,
+                        fields
+                    )
+                    
+                    if not smart_result and 'address' in fields and fields['address'].get('required', False):
+                        fields['address']['requires_human_review'] = True
+                        fields['address']['review_notes'] = "Required address field could not be validated by Google Maps or smart validation"
+                        fields['address']['review_confidence'] = 0.3
+                else:
+                    # No zip code and address validation failed - flag for review
+                    if 'address' in fields and fields['address'].get('required', False):
+                        fields['address']['requires_human_review'] = True
+                        fields['address']['review_notes'] = f"Address could not be validated - please verify '{address}' in '{city}', {state}"
+                        fields['address']['review_confidence'] = 0.3
+                        log_debug(f"Address flagged for review: no zip code and validation failed", service="address")
         except Exception as e:
             log_debug(f"Google Maps validation failed: {str(e)}", service="address")
             
@@ -189,6 +197,10 @@ def validate_and_enhance_address(fields: Dict[str, Any]) -> Dict[str, Any]:
     
     log_debug("=== ADDRESS VALIDATION COMPLETE ===", service="address")
     return fields
+
+
+# Removed problematic smart Google queries approach
+# Now using conservative validation: require valid city OR zip code
 
 def _should_enhance_field(current_field: Dict[str, Any], new_value: str) -> bool:
     """
