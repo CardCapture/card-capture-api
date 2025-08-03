@@ -404,12 +404,15 @@ def validate_address_with_google_maps(address: str, city: str, state: str, zip_c
         log_debug("Google Maps client not initialized", service="address")
         return None
 
+    # Allow validation without zip code - Google Maps can find it
     if not zip_code:
-        log_debug("Zip Code missing for Google Maps validation", service="address")
-        return None
+        log_debug("No zip code provided - will try to get it from Google Maps", service="address")
     
     # Construct full address string for validation  
-    full_address_query = f"{address}, {city}, {state} {zip_code}"
+    if zip_code:
+        full_address_query = f"{address}, {city}, {state} {zip_code}"
+    else:
+        full_address_query = f"{address}, {city}, {state}"
     log_debug(f"Validating via Google Maps (Primary): {full_address_query}", service="address")
 
     try:
@@ -422,12 +425,29 @@ def validate_address_with_google_maps(address: str, city: str, state: str, zip_c
             formatted_address = result.get('formatted_address', '')
             geometry = result.get('geometry', {})
             location = geometry.get('location', {})
+            components = result.get('address_components', [])
+            
+            # Extract components including zip code if not provided
+            extracted_data = {}
+            for component in components:
+                types = component.get('types', [])
+                if 'postal_code' in types:
+                    extracted_data['zip'] = component['long_name']
+                elif 'locality' in types:
+                    extracted_data['city'] = component['long_name']
+                elif 'administrative_area_level_1' in types:
+                    extracted_data['state'] = component['short_name']
+                elif 'street_number' in types:
+                    extracted_data['street_number'] = component['long_name']
+                elif 'route' in types:
+                    extracted_data['street_name'] = component['long_name']
             
             log_debug("Google Maps validation successful", {
                 "original_query": full_address_query,
                 "formatted_address": formatted_address,
                 "lat": location.get('lat'),
-                "lng": location.get('lng')
+                "lng": location.get('lng'),
+                "extracted_components": extracted_data
             }, service="address")
             
             return {
@@ -436,7 +456,8 @@ def validate_address_with_google_maps(address: str, city: str, state: str, zip_c
                 "latitude": location.get('lat'),
                 "longitude": location.get('lng'),
                 "place_id": result.get('place_id'),
-                "confidence": "high"  # Google Maps geocoding generally has high confidence
+                "confidence": "high",  # Google Maps geocoding generally has high confidence
+                **extracted_data  # Include extracted components like zip code
             }
         else:
             log_debug("Google Maps found no results for address", {"query": full_address_query}, service="address")
