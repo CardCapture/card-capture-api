@@ -420,28 +420,65 @@ async def export_to_slate_service(payload: dict):
                 "error": f"SFTP configuration is missing required fields: {', '.join(missing_fields)}"
             })
         
-        # Generate CSV content using dynamic card fields
+        # Generate CSV content using dynamic card fields with pretty headers
         csv_content = io.StringIO()
         
-        # Extract enabled field names from card_fields configuration
-        headers = []
+        # Standard field labels mapping (same as frontend csvExport.ts)
+        field_labels_map = {
+            'event_name': 'Event Name',
+            'slate_event_id': 'Event ID',
+            'first_name': 'First Name',
+            'last_name': 'Last Name',
+            'email': 'Email',
+            'cell': 'Cell Phone',
+            'phone': 'Phone Number',
+            'date_of_birth': 'Birthday',
+            'birthday': 'Birthday',
+            'permission_to_text': 'Permission to Text',
+            'address': 'Address',
+            'city': 'City',
+            'state': 'State',
+            'zip_code': 'Zip Code',
+            'zip': 'Zip Code',
+            'high_school': 'High School',
+            'class_rank': 'Class Rank',
+            'students_in_class': 'Students in Class',
+            'gpa': 'GPA',
+            'student_type': 'Student Type',
+            'entry_term': 'Entry Term',
+            'major': 'Major',
+            'mapped_major': 'Mapped Major',
+            'middle_initial': 'Middle Initial',
+            'preferred_name': 'Preferred Name',
+            'date_created': 'Date Created'
+        }
+        
+        # Extract enabled field keys from card_fields configuration
+        field_keys = []
         for field_config in card_fields:
             if isinstance(field_config, dict) and field_config.get("enabled", False):
                 field_key = field_config.get("key")
                 if field_key:
                     # Replace 'name' with 'first_name' and 'last_name' for better Slate compatibility
                     if field_key == "name":
-                        headers.extend(["first_name", "last_name"])
+                        field_keys.extend(["first_name", "last_name"])
                     else:
-                        headers.append(field_key)
+                        field_keys.append(field_key)
         
         # Add common fields that might not be in card_fields but are useful for export
         additional_fields = ["event_name", "slate_event_id", "date_created"]
         for field in additional_fields:
-            if field not in headers:
-                headers.append(field)
+            if field not in field_keys:
+                field_keys.append(field)
+        
+        # Convert field keys to pretty headers
+        headers = []
+        for field_key in field_keys:
+            pretty_label = field_labels_map.get(field_key, field_key.replace('_', ' ').title())
+            headers.append(pretty_label)
         
         log_debug(f"SLATE EXPORT: Using CSV headers: {headers}", service="uploads")
+        log_debug(f"SLATE EXPORT: Field keys mapping: {field_keys}", service="uploads")
         
         def split_name(full_name):
             """Split a full name into first name and last name"""
@@ -479,17 +516,39 @@ async def export_to_slate_service(payload: dict):
             if document_id:
                 document_ids.append(document_id)
             
-            # Prepare row data for CSV using dynamic headers
+            # Prepare row data for CSV using pretty headers
             csv_row = {}
-            for header in headers:
+            for i, header in enumerate(headers):
+                # Get the corresponding field key for this header
+                field_key = field_keys[i] if i < len(field_keys) else header
+                
                 # Check if this is a field that should come from the nested fields object
-                if header in ["event_name", "slate_event_id", "date_created", "document_id"]:
+                if field_key in ["event_name", "slate_event_id", "date_created", "document_id"]:
                     # These are top-level fields
-                    csv_row[header] = row.get(header, "")
-                elif header in ["first_name", "last_name"]:
+                    csv_row[header] = row.get(field_key, "")
+                elif field_key in ["first_name", "last_name"]:
                     # Handle name splitting
                     fields_data = row.get("fields", {})
                     if isinstance(fields_data, dict):
+                        # Try separate first/last name fields first
+                        if field_key == "first_name":
+                            first_name_data = fields_data.get("first_name", {})
+                            if first_name_data:
+                                if isinstance(first_name_data, dict):
+                                    csv_row[header] = str(first_name_data.get("value", ""))
+                                else:
+                                    csv_row[header] = str(first_name_data)
+                                continue
+                        elif field_key == "last_name":
+                            last_name_data = fields_data.get("last_name", {})
+                            if last_name_data:
+                                if isinstance(last_name_data, dict):
+                                    csv_row[header] = str(last_name_data.get("value", ""))
+                                else:
+                                    csv_row[header] = str(last_name_data)
+                                continue
+                        
+                        # Fallback to splitting full name
                         name_field_data = fields_data.get("name", {})
                         full_name = ""
                         
@@ -499,14 +558,31 @@ async def export_to_slate_service(payload: dict):
                             full_name = str(name_field_data) if name_field_data else ""
                         
                         name_parts = split_name(full_name)
-                        csv_row[header] = name_parts.get(header, "")
+                        csv_row[header] = name_parts.get(field_key, "")
                     else:
                         csv_row[header] = ""
                 else:
                     # These are card fields - extract from nested fields object
                     fields_data = row.get("fields", {})
                     if isinstance(fields_data, dict):
-                        field_data = fields_data.get(header, {})
+                        # Try alternative field names for common mappings
+                        field_data = fields_data.get(field_key, {})
+                        if not field_data:
+                            # Try alternative field names
+                            alternatives = {
+                                'cell': ['phone', 'cell_phone', 'home_phone'],
+                                'phone': ['cell', 'cell_phone', 'home_phone'],
+                                'date_of_birth': ['birthday', 'birth_date'],
+                                'birthday': ['date_of_birth', 'birth_date'],
+                                'zip_code': ['zip', 'postal_code'],
+                                'zip': ['zip_code', 'postal_code']
+                            }
+                            if field_key in alternatives:
+                                for alt_field in alternatives[field_key]:
+                                    field_data = fields_data.get(alt_field, {})
+                                    if field_data:
+                                        break
+                        
                         if isinstance(field_data, dict):
                             csv_row[header] = field_data.get("value", "")
                         else:

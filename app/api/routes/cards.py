@@ -18,6 +18,9 @@ from app.core.clients import supabase_client
 from app.repositories.reviewed_data_repository import upsert_reviewed_data
 # Removed import: canonicalize_fields - no longer using canonicalization
 from app.utils.field_utils import filter_combined_fields
+from app.utils.retry_utils import log_debug
+from app.models.address_suggestions import AddressSuggestionsRequest, AddressSuggestionsResponse
+from app.services.address_suggestions_service import get_address_suggestions
 
 router = APIRouter()
 
@@ -169,6 +172,33 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
     except Exception as e:
         print(f"Error saving review: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/address-suggestions", response_model=AddressSuggestionsResponse)
+async def get_address_suggestions_endpoint(payload: AddressSuggestionsRequest):
+    """
+    Get real-time address suggestions for review modal
+    
+    Provides multiple ranked suggestions based on:
+    - Google Maps validation
+    - ZIP code validation  
+    - Smart address correction
+    
+    Used by frontend to show smart preview suggestions when user edits address fields.
+    """
+    try:
+        result = await get_address_suggestions(payload)
+        return result
+    except Exception as e:
+        log_debug(f"Address suggestions endpoint failed: {str(e)}", service="cards_api")
+        return AddressSuggestionsResponse(
+            success=False,
+            has_suggestions=False,
+            suggestions=[],
+            original_input=payload.dict(),
+            validation_attempted=True,
+            error=f"Internal server error: {str(e)}"
+        )
 
 @router.post("/cards/manual")
 async def manual_entry(payload: Dict[str, Any] = Body(...)):

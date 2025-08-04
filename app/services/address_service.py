@@ -61,11 +61,13 @@ def validate_and_enhance_address(fields: Dict[str, Any]) -> Dict[str, Any]:
         log_debug("Address was flagged as invalid, skipping Google validation", service="address")
         return fields
     
-    # Only proceed with Google Maps validation if we have a zip code
-    if zip_code:
+    # Try Google Maps validation if we have zip code OR if we have address+city+state (to auto-fill missing zip)
+    if zip_code or (address and city and state):
         try:
-            # First try zip code validation to get city and state
-            zip_validation = validate_zip_code(zip_code)
+            # First try zip code validation to get city and state (only if we have a zip code)
+            zip_validation = None
+            if zip_code:
+                zip_validation = validate_zip_code(zip_code)
             if zip_validation:
                 # Enhance city if missing or low confidence
                 if 'city' in zip_validation and _should_enhance_field(fields.get('city', {}), zip_validation['city']):
@@ -121,23 +123,45 @@ def validate_and_enhance_address(fields: Dict[str, Any]) -> Dict[str, Any]:
                 
                 # Sync corrected components (city, state, zip) from Google Maps back to individual fields
                 _sync_corrected_components(fields, validated_address, city, state, zip_code)
+                
+                # If zip code was missing but Google Maps found one, update the zip_code field
+                if not zip_code and 'zip' in validated_address and validated_address['zip']:
+                    log_debug(f"Auto-filling missing zip code: {validated_address['zip']}", service="address")
+                    original_zip_field = fields.get('zip_code', {})
+                    fields['zip_code'] = _create_enhanced_field(
+                        validated_address['zip'],
+                        "google_maps_autofill",
+                        f"ZIP code auto-filled by Google Maps: {validated_address['zip']}",
+                        preserve_field_requirements=original_zip_field
+                    )
+                    # Clear review flag since we auto-filled it
+                    fields['zip_code']['requires_human_review'] = False
+                    fields['zip_code']['review_notes'] = ""
             elif address:
                 # We have an address but Google Maps couldn't validate it
                 log_debug(f"Address '{address}' could not be validated by Google Maps", service="address")
                 
-                # Try smart address validation as a fallback
-                smart_result = _try_smart_address_validation(
-                    address, 
-                    city or (zip_validation.get('city', '') if zip_validation else ''),
-                    state or (zip_validation.get('state', '') if zip_validation else ''),
-                    zip_code,
-                    fields
-                )
-                
-                if not smart_result and 'address' in fields and fields['address'].get('required', False):
-                    fields['address']['requires_human_review'] = True
-                    fields['address']['review_notes'] = "Required address field could not be validated by Google Maps or smart validation"
-                    fields['address']['review_confidence'] = 0.3
+                # Try smart address validation as a fallback only if we have a zip code
+                if zip_code:
+                    smart_result = _try_smart_address_validation(
+                        address, 
+                        city or (zip_validation.get('city', '') if zip_validation else ''),
+                        state or (zip_validation.get('state', '') if zip_validation else ''),
+                        zip_code,
+                        fields
+                    )
+                    
+                    if not smart_result and 'address' in fields and fields['address'].get('required', False):
+                        fields['address']['requires_human_review'] = True
+                        fields['address']['review_notes'] = "Required address field could not be validated by Google Maps or smart validation"
+                        fields['address']['review_confidence'] = 0.3
+                else:
+                    # No zip code and address validation failed - flag for review
+                    if 'address' in fields and fields['address'].get('required', False):
+                        fields['address']['requires_human_review'] = True
+                        fields['address']['review_notes'] = f"Address could not be validated - please verify '{address}' in '{city}', {state}"
+                        fields['address']['review_confidence'] = 0.3
+                        log_debug(f"Address flagged for review: no zip code and validation failed", service="address")
         except Exception as e:
             log_debug(f"Google Maps validation failed: {str(e)}", service="address")
             
@@ -173,6 +197,10 @@ def validate_and_enhance_address(fields: Dict[str, Any]) -> Dict[str, Any]:
     
     log_debug("=== ADDRESS VALIDATION COMPLETE ===", service="address")
     return fields
+
+
+# Removed problematic smart Google queries approach
+# Now using conservative validation: require valid city OR zip code
 
 def _should_enhance_field(current_field: Dict[str, Any], new_value: str) -> bool:
     """
@@ -404,12 +432,15 @@ def validate_address_with_google_maps(address: str, city: str, state: str, zip_c
         log_debug("Google Maps client not initialized", service="address")
         return None
 
+    # Allow validation without zip code - Google Maps can find it
     if not zip_code:
-        log_debug("Zip Code missing for Google Maps validation", service="address")
-        return None
+        log_debug("No zip code provided - will try to get it from Google Maps", service="address")
     
     # Construct full address string for validation  
-    full_address_query = f"{address}, {city}, {state} {zip_code}"
+    if zip_code:
+        full_address_query = f"{address}, {city}, {state} {zip_code}"
+    else:
+        full_address_query = f"{address}, {city}, {state}"
     log_debug(f"Validating via Google Maps (Primary): {full_address_query}", service="address")
 
     try:
@@ -422,12 +453,29 @@ def validate_address_with_google_maps(address: str, city: str, state: str, zip_c
             formatted_address = result.get('formatted_address', '')
             geometry = result.get('geometry', {})
             location = geometry.get('location', {})
+            components = result.get('address_components', [])
+            
+            # Extract components including zip code if not provided
+            extracted_data = {}
+            for component in components:
+                types = component.get('types', [])
+                if 'postal_code' in types:
+                    extracted_data['zip'] = component['long_name']
+                elif 'locality' in types:
+                    extracted_data['city'] = component['long_name']
+                elif 'administrative_area_level_1' in types:
+                    extracted_data['state'] = component['short_name']
+                elif 'street_number' in types:
+                    extracted_data['street_number'] = component['long_name']
+                elif 'route' in types:
+                    extracted_data['street_name'] = component['long_name']
             
             log_debug("Google Maps validation successful", {
                 "original_query": full_address_query,
                 "formatted_address": formatted_address,
                 "lat": location.get('lat'),
-                "lng": location.get('lng')
+                "lng": location.get('lng'),
+                "extracted_components": extracted_data
             }, service="address")
             
             return {
@@ -436,7 +484,8 @@ def validate_address_with_google_maps(address: str, city: str, state: str, zip_c
                 "latitude": location.get('lat'),
                 "longitude": location.get('lng'),
                 "place_id": result.get('place_id'),
-                "confidence": "high"  # Google Maps geocoding generally has high confidence
+                "confidence": "high",  # Google Maps geocoding generally has high confidence
+                **extracted_data  # Include extracted components like zip code
             }
         else:
             log_debug("Google Maps found no results for address", {"query": full_address_query}, service="address")

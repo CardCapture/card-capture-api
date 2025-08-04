@@ -735,7 +735,7 @@ def should_auto_correct(score: float) -> bool:
     """
     Determine if the confidence is high enough for automatic correction
     """
-    return score >= 0.90  # Auto-correct for 90%+ confidence
+    return score >= 0.80  # Auto-correct for 80%+ confidence (medium_high and above)
 
 
 def _validate_corrected_address_for_zip(corrected_address: str, city: str, state: str) -> Optional[Dict[str, Any]]:

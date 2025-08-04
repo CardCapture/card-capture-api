@@ -14,18 +14,19 @@ def validate_address_with_google(address_str: str, city: str = '', state: str = 
         log_debug("Google Maps client not initialized", service="document")
         return None
     
+    # Allow validation without zip code - Google Maps can find it
     if not zip_code:
-        log_debug("Zip Code missing for Google Maps validation", service="document")
-        return None
+        log_debug("No zip code provided - will try to get it from Google Maps", service="document")
     
     try:
-        # Enhanced address validation using zip code
+        # Enhanced address validation 
         full_address_query = f"{address_str}"
         if city:
             full_address_query += f", {city}"
         if state:
             full_address_query += f", {state}"
-        full_address_query += f", {zip_code}"
+        if zip_code:
+            full_address_query += f", {zip_code}"
         
         log_debug(f"Validating via Google Maps (Primary): {full_address_query}", service="document")
         

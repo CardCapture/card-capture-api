@@ -81,6 +81,12 @@ package.json
 
 # Project-specific
 UMHB/
+ACU/
 pdf_trim.py
+
+# Test and result files
+*_test_results.json
+smart_address_test_results.json
+trim_image_test/
 
 *.sql
