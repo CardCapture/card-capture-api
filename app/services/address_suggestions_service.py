@@ -26,6 +26,26 @@ async def get_address_suggestions(request: AddressSuggestionsRequest) -> Address
     try:
         suggestions = []
         
+        # Check for missing street number before attempting any validation
+        if (request.address and request.address.strip() and 
+            request.state and request.state.strip() and
+            ((request.city and request.city.strip()) or (request.zip_code and request.zip_code.strip())) and
+            not _has_street_number(request.address)):
+            
+            # Return helpful error message for missing street number
+            log_debug("Address missing street number, returning helpful error", {
+                "address": request.address
+            }, service="address_suggestions")
+            
+            return AddressSuggestionsResponse(
+                success=False,
+                has_suggestions=False,
+                suggestions=[],
+                original_input=request.dict(),
+                validation_attempted=True,
+                error="Please add a house number to validate the address"
+            )
+        
         # Strategy 1: Direct Google Maps validation (highest priority)
         if _has_sufficient_info_for_google(request):
             google_suggestion = await _validate_with_google_maps_strategy(request)
@@ -78,18 +98,42 @@ async def get_address_suggestions(request: AddressSuggestionsRequest) -> Address
         )
 
 
+def _has_street_number(address: str) -> bool:
+    """Check if address contains a street number"""
+    if not address or not address.strip():
+        return False
+    
+    import re
+    # Look for numbers at the beginning of the address
+    # This regex matches: 
+    # - One or more digits at the start (optionally followed by letter like 123A)
+    # - Optionally followed by a dash or space and more digits (like 123-45 or 123 1/2)
+    street_number_pattern = r'^\s*\d+[A-Za-z]?(\s*[-/]\s*\d+)*\s+'
+    
+    has_number = bool(re.match(street_number_pattern, address.strip()))
+    
+    log_debug("Checking for street number in address", {
+        "address": address,
+        "has_street_number": has_number
+    }, service="address_suggestions")
+    
+    return has_number
+
+
 def _has_sufficient_info_for_google(request: AddressSuggestionsRequest) -> bool:
     """Check if we have enough information for Google Maps validation"""
     has_address = bool(request.address and request.address.strip())
     has_state = bool(request.state and request.state.strip())
     has_location_context = bool(request.city and request.city.strip()) or bool(request.zip_code and request.zip_code.strip())
+    has_street_number = _has_street_number(request.address or "")
     
-    sufficient = has_address and has_state and has_location_context
+    sufficient = has_address and has_state and has_location_context and has_street_number
     
     log_debug("Checking sufficiency for Google validation", {
         "has_address": has_address,
         "has_state": has_state, 
         "has_location_context": has_location_context,
+        "has_street_number": has_street_number,
         "sufficient": sufficient
     }, service="address_suggestions")
     
