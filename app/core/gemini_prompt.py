@@ -66,11 +66,14 @@ For every field in the input, return this exact structure:
 **GPA, Rank** – GPA = decimal. Rank = extract both "X of Y" numbers. Convert fractions if present. Field type: "text".
 
 **Checkboxes / Select Fields** – CRITICAL: Always examine the image for checkbox groups or multiple choice options.
-- For permission_to_text: Look for Yes/No checkboxes. Field type: "select", detected_options: ["Yes", "No"]
+- For permission_to_text: IMPORTANT - This field can have different formats:
+  * If you see Yes/No checkboxes: Field type: "select", detected_options: ["Yes", "No"], value is the checked option
+  * If you see a single checkbox with "opt-out" language (like "Check if you DON'T want texts"): Field type: "select", detected_options: ["Yes", "No"], value is "No" if checked (opted out), "Yes" if blank (wants texts)
+  * For ACU cards specifically: Look for checkbox with "don't want to receive" language - checked means "No", blank means "Yes"
 - For student_type: Look for Freshman/Sophomore/Junior/Senior checkboxes. Field type: "select", detected_options: ["Freshman", "Sophomore", "Junior", "Senior", "Graduate", "Transfer"]
 - For any field with visible checkbox options on the form, set field_type: "select" and list all visible options in detected_options
 - Common checkbox patterns to detect: gender (Male/Female/Other), program type, enrollment status, demographic categories, yes/no questions
-- Notes: "Checkbox clearly marked [option]" or "Multiple choice field with X options detected"
+- Notes: "Checkbox clearly marked [option]" or "Negative opt-out checkbox interpreted" or "Multiple choice field with X options detected"
 
 **Major Field** – CRITICAL: Never change the `major` field value. Always preserve the exact text written on the card. If the card shows "Sports Management", keep it as "Sports Management". Do not set it to null or change it to a mapped value. Field type: "text".
 
