@@ -189,8 +189,12 @@ async def _validate_with_zip_strategy(request: AddressSuggestionsRequest) -> Opt
         if google_result and _is_complete_address_result(google_result):
             return _create_suggestion_from_google_result(google_result, request, source="zip_validation")
         else:
-            # Fallback: use ZIP validation to correct city/state only
-            return _create_suggestion_from_zip_result(zip_result, request)
+            # Don't create fallback suggestions if Google Maps can't validate the full address
+            log_debug("Skipping ZIP suggestion - Google Maps could not validate complete address", {
+                "address": request.address,
+                "google_result": google_result
+            }, service="address_suggestions")
+            return None
             
     except Exception as e:
         log_debug(f"ZIP strategy failed: {str(e)}", service="address_suggestions")
