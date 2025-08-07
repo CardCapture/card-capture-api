@@ -14,7 +14,7 @@ from app.services.cards_service import (
     save_manual_review_service,
     get_cards_service
 )
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.repositories.reviewed_data_repository import upsert_reviewed_data
 # Removed import: canonicalize_fields - no longer using canonicalization
 from app.utils.field_utils import filter_combined_fields
@@ -106,6 +106,7 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
     """
     try:
         # Get current card data
+        supabase_client = get_supabase_client()
         current_card = supabase_client.table("reviewed_data").select("*").eq("document_id", document_id).maybe_single().execute()
         if not current_card or not current_card.data:
             raise HTTPException(status_code=404, detail="Card not found")
@@ -273,6 +274,7 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
             return JSONResponse(status_code=400, content={"error": "field_name is required"})
         
         # Get current card data
+        supabase_client = get_supabase_client()
         current_card = supabase_client.table("reviewed_data").select("*").eq("document_id", document_id).maybe_single().execute()
         if not current_card or not current_card.data:
             raise HTTPException(status_code=404, detail="Card not found")
@@ -340,10 +342,8 @@ async def manual_entry(payload: Dict[str, Any] = Body(...)):
     Create a new manual entry in reviewed_data with review_status='reviewed' and no image.
     Expects: { event_id, school_id, fields: { ... } }
     """
-    if not supabase_client:
-        return JSONResponse(status_code=503, content={"error": "Database client not available."})
-
     try:
+        supabase_client = get_supabase_client()
         event_id = payload.get("event_id")
         school_id = payload.get("school_id")
         fields = payload.get("fields", {})

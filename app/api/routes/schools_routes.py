@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Body
 from app.controllers.schools_controller import get_school_controller
 from app.core.auth import get_current_user
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from fastapi.responses import JSONResponse
 from typing import Dict, Any
 import json
@@ -18,10 +18,8 @@ async def update_school_card_fields(school_id: str, payload: Dict[str, Any] = Bo
     Updates the card_fields in the schools table for a given school.
     Expects a payload with a card_fields object containing field settings.
     """
-    if not supabase_client:
-        return JSONResponse(status_code=503, content={"error": "Database client not available."})
-
     try:
+        supabase_client = get_supabase_client()
         card_fields = payload.get("card_fields", {})
         if not card_fields:
             return JSONResponse(status_code=400, content={"error": "card_fields is required in payload."})

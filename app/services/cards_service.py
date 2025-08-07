@@ -8,7 +8,7 @@ from app.models.card import (
     DeleteCardsPayload,
     MoveCardsPayload
 )
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.repositories.cards_repository import (
     get_cards_db,
     archive_cards_db,
@@ -26,6 +26,7 @@ async def get_cards_service(event_id: str = None, school_id: str = None):
         if event_id:
             log_debug(f"Filtering by event_id: {event_id}", service="cards")
         
+        supabase_client = get_supabase_client()
         result = get_cards_db(supabase_client, event_id)
         log_debug(f"Found {len(result)} reviewed records", service="cards")
         log_debug(f"Returning {len(result)} non-deleted, non-archived records", service="cards")
