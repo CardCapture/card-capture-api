@@ -4,10 +4,16 @@ import tempfile
 import traceback
 import json
 import signal
-import psutil
 from datetime import datetime, timezone
 from typing import Dict, Any
 import re
+
+# Optional psutil import for memory monitoring
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -66,7 +72,7 @@ def log_worker_debug(message: str, data: Any = None, verbose: bool = False):
     timestamp = datetime.now(timezone.utc).isoformat()
     
     # Add memory usage to critical logs
-    if any(keyword in message.lower() for keyword in ['start', 'end', 'error', 'timeout']):
+    if PSUTIL_AVAILABLE and any(keyword in message.lower() for keyword in ['start', 'end', 'error', 'timeout']):
         try:
             process = psutil.Process()
             memory_info = process.memory_info()
