@@ -773,6 +773,11 @@ def main_v2():
         log_worker_debug("Worker traceback", traceback.format_exc())
         time.sleep(SLEEP_SECONDS)
 
+@app.get("/process")
+def process_get_endpoint():
+    """GET endpoint for health checks - returns service status"""
+    return {"message": "Worker is ready", "method": "POST", "status": "healthy"}
+
 @app.post("/process")
 async def process_job_endpoint(request: Request):
     try:
