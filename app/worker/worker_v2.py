@@ -939,8 +939,8 @@ async def retry_ai_processing(document_id: str):
             
             # Update reviewed_data with successful results
             now = datetime.now(timezone.utc).isoformat()
-        supabase_client = get_supabase_client()
-        update_result = supabase_client.table("reviewed_data").update({
+            supabase_client = get_supabase_client()
+            update_result = supabase_client.table("reviewed_data").update({
                 "fields": filtered_fields,            # Now has proper Gemini data without combined fields
                 "review_status": new_review_status,   # Proper review status
                 "ai_error_message": None,            # Clear the error
