@@ -59,6 +59,11 @@ app.add_middleware(
 def root():
     return {"message": "CardCapture Worker API is running"}
 
+@app.get("/health")
+def health_check():
+    """Health check endpoint for Cloud Run"""
+    return {"status": "healthy", "service": "card-capture-worker-v2"}
+
 def log_worker_debug(message: str, data: Any = None, verbose: bool = False):
     """Write debug message and optional data to worker_v2_debug.log and stdout for Cloud Run."""
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -905,6 +910,5 @@ async def retry_ai_processing(document_id: str):
         raise HTTPException(status_code=500, detail=f"Retry failed: {str(e)}")
 
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port) 
+# Remove the main block - let Cloud Run handle uvicorn startup
+# The Dockerfile.worker already has: CMD uvicorn app.worker.worker_v2:app --host 0.0.0.0 --port $PORT 

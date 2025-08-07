@@ -23,7 +23,7 @@ serve(async (req) => {
     console.log(`Processing job trigger for jobId: ${jobId}`);
 
     // Make request to Cloud Run service with /process endpoint
-    const cloudRunUrl =
+    const cloudRunUrl = Deno.env.get("WORKER_URL") || 
       "https://card-capture-worker-v2-staging-878585200500.us-central1.run.app/process";
 
     const response = await fetch(cloudRunUrl, {
