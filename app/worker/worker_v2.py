@@ -3,6 +3,8 @@ import time
 import tempfile
 import traceback
 import json
+import signal
+import psutil
 from datetime import datetime, timezone
 from typing import Dict, Any
 import re
@@ -36,6 +38,13 @@ from app.repositories.uploads_repository import (
 BUCKET = "cards-uploads"
 MAX_RETRIES = 3
 SLEEP_SECONDS = 1
+PROCESSING_TIMEOUT = 120  # 2 minutes timeout for each job
+
+class TimeoutException(Exception):
+    pass
+
+def timeout_handler(signum, frame):
+    raise TimeoutException("Processing timed out")
 
 app = FastAPI(title="CardCapture Worker API")
 
@@ -55,6 +64,17 @@ def root():
 def log_worker_debug(message: str, data: Any = None, verbose: bool = False):
     """Write debug message and optional data to worker_v2_debug.log and stdout for Cloud Run."""
     timestamp = datetime.now(timezone.utc).isoformat()
+    
+    # Add memory usage to critical logs
+    if any(keyword in message.lower() for keyword in ['start', 'end', 'error', 'timeout']):
+        try:
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / 1024 / 1024
+            message = f"{message} [Memory: {memory_mb:.1f}MB]"
+        except Exception:
+            pass  # Don't fail logging if psutil fails
+    
     log_entry = f"\n[{timestamp}] {message}\n"
     if data is not None:
         try:
@@ -340,7 +360,7 @@ def detect_field_value_discrepancies(before_fields: dict, after_fields: dict, st
 
 def process_job_v2(job: Dict[str, Any]) -> None:
     """
-    Simplified, reliable processing flow with atomic database operations
+    Simplified, reliable processing flow with atomic database operations and timeout protection
     """
     job_id = job["id"]
     file_url = job["file_url"]
@@ -354,10 +374,17 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         "User ID": user_id,
         "School ID": school_id,
         "Event ID": event_id,
-        "File URL": file_url
+        "File URL": file_url,
+        "Timeout": f"{PROCESSING_TIMEOUT} seconds"
     })
     
     tmp_file = None
+    trimmed_image_path = None
+    
+    # Set up timeout protection
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(PROCESSING_TIMEOUT)
+    
     try:
         # Step 1: Get school field requirements
         log_worker_debug("=== STEP 1: GET FIELD REQUIREMENTS ===")
@@ -569,6 +596,14 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         except Exception as e:
             log_worker_debug(f"Failed to upload trimmed image to Supabase: {e}")
         
+        # Clean up trimmed image file immediately after upload
+        if trimmed_image_path and os.path.exists(trimmed_image_path):
+            try:
+                os.remove(trimmed_image_path)
+                log_worker_debug(f"Cleaned up trimmed image file: {trimmed_image_path}")
+            except Exception as cleanup_error:
+                log_worker_debug(f"Warning: Failed to clean up trimmed image: {cleanup_error}")
+        
         # Step 12: Update job status and create review data
         log_worker_debug("=== STEP 12: UPDATE JOB STATUS ===")
         
@@ -631,6 +666,19 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         log_worker_debug(f"✅ Job {job_id} completed successfully")
         log_worker_debug("=== PROCESSING JOB V2 END ===\n")
         
+    except TimeoutException:
+        log_worker_debug(f"⏰ Job {job_id} timed out after {PROCESSING_TIMEOUT} seconds")
+        
+        # Update job status to failed with timeout message
+        now = datetime.now(timezone.utc).isoformat()
+        update_processing_job(supabase_client, job_id, {
+            "status": "failed",
+            "error_message": f"Processing timed out after {PROCESSING_TIMEOUT} seconds",
+            "updated_at": now
+        })
+        
+        raise
+        
     except Exception as e:
         log_worker_debug(f"❌ Error processing job {job_id}: {str(e)}")
         log_worker_debug("Full traceback", traceback.format_exc())
@@ -643,12 +691,31 @@ def process_job_v2(job: Dict[str, Any]) -> None:
             "updated_at": now
         })
         
-        # Clean up temporary files
-        if os.path.exists(tmp_file):
-            os.remove(tmp_file)
-            log_worker_debug(f"Cleaned up temporary file: {tmp_file}")
-        
         raise
+        
+    finally:
+        # Clear timeout alarm
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+        
+        # Comprehensive cleanup - always runs whether success or failure
+        cleanup_files = []
+        if tmp_file and os.path.exists(tmp_file):
+            cleanup_files.append(tmp_file)
+        if trimmed_image_path and os.path.exists(trimmed_image_path):
+            cleanup_files.append(trimmed_image_path)
+        
+        for file_path in cleanup_files:
+            try:
+                os.remove(file_path)
+                log_worker_debug(f"Cleaned up temporary file: {file_path}")
+            except Exception as cleanup_error:
+                log_worker_debug(f"Warning: Failed to clean up {file_path}: {cleanup_error}")
+        
+        # Force garbage collection to free memory
+        import gc
+        gc.collect()
+        log_worker_debug("Forced garbage collection completed")
 
 def main_v2():
     """
