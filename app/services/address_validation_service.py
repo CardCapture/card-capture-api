@@ -119,35 +119,38 @@ def validate_address(
                     original_query=original_query
                 )
             
-            # Check if it's an exact match or close suggestion
-            is_exact_match = _is_exact_match(original_query, google_result)
+            # Get confidence score
+            confidence_score = google_result.get('confidence_score', 0)
             
-            # Check if we're filling in missing fields (helpful mode)
-            # If user provided partial info and we found the rest, show as "can_be_verified"
-            # so they can review and confirm the complete address
-            is_filling_blanks = False
-            if google_result:
-                # Check if Google filled in fields that were empty in the original query
-                if (not city.strip() and google_result.get('city')) or \
-                   (not state.strip() and google_result.get('state')) or \
-                   (not zip_code.strip() and google_result.get('zip_code')):
-                    is_filling_blanks = True
-                    log_debug("Google Maps filled in missing fields - showing as CAN BE VERIFIED for user confirmation", service="address_validation")
-            
-            if is_exact_match and not is_filling_blanks:
-                log_debug("Exact match found with all fields provided - VERIFIED", service="address_validation")
+            # High confidence (80+) = treat as verified even if not exact match
+            # This handles cases where Google standardizes the address format
+            if confidence_score >= 80:
+                log_debug(f"High confidence match (score: {confidence_score}) - VERIFIED", service="address_validation")
                 return AddressValidationResult(
                     "verified",
                     is_valid=True,
                     suggestion=_format_suggestion(google_result),
                     original_query=original_query
                 )
-            else:
-                log_debug("Address suggestion found - CAN BE VERIFIED", service="address_validation")
+            
+            # Medium confidence (60-79) = can be verified
+            # User should review but we're fairly confident
+            elif confidence_score >= 60:
+                log_debug(f"Medium confidence match (score: {confidence_score}) - CAN BE VERIFIED", service="address_validation")
                 return AddressValidationResult(
                     "can_be_verified",
                     is_valid=True,
                     suggestion=_format_suggestion(google_result),
+                    original_query=original_query
+                )
+            
+            # Low confidence (< 60) = not verified
+            # Too uncertain to suggest
+            else:
+                log_debug(f"Low confidence match (score: {confidence_score}) - NOT VERIFIED", service="address_validation")
+                return AddressValidationResult(
+                    "not_verified",
+                    error="Could not confidently validate address",
                     original_query=original_query
                 )
         else:
@@ -229,17 +232,21 @@ def _is_complete_deliverable_address(google_result: Dict[str, Any]) -> bool:
 
 
 def _has_house_number(address: str) -> bool:
-    """Check if address contains a house number at the beginning"""
+    """Check if address contains a house number (at beginning or end)"""
     import re
     
     if not address or not address.strip():
         return False
     
-    # Look for digits at the start, optionally followed by letter (123A)
-    # Allow for fractions like 123 1/2 or ranges like 123-125
-    pattern = r'^\s*\d+[A-Za-z]?(\s*[-/]\s*\d+)*\s+'
+    addr = address.strip()
     
-    has_number = bool(re.match(pattern, address.strip()))
+    # Pattern for house number at the start
+    start_pattern = r'^\s*\d+[A-Za-z]?(\s*[-/]\s*\d+)*\s+'
+    
+    # Pattern for house number at the end (e.g., "N Henderson 1601")
+    end_pattern = r'\s+\d+[A-Za-z]?(\s*[-/]\s*\d+)*\s*$'
+    
+    has_number = bool(re.match(start_pattern, addr) or re.search(end_pattern, addr))
     
     log_debug("House number check", {
         "address": address,
@@ -250,13 +257,16 @@ def _has_house_number(address: str) -> bool:
 
 
 def _validate_with_google_maps(address: str, city: str, state: str, zip_code: str) -> Optional[Dict[str, Any]]:
-    """Call Google Maps API for validation"""
+    """Call Google Maps API for validation with smart query handling"""
     
     if not gmaps_client:
         log_debug("Google Maps client not initialized", service="address_validation")
         return None
     
-    # Build query string
+    # Try multiple query strategies
+    queries_to_try = []
+    
+    # Original query
     query_parts = [address]
     if city.strip():
         query_parts.append(city.strip())
@@ -264,59 +274,104 @@ def _validate_with_google_maps(address: str, city: str, state: str, zip_code: st
         query_parts.append(state.strip())
     if zip_code.strip():
         query_parts.append(zip_code.strip())
+    queries_to_try.append(", ".join(query_parts))
     
-    full_query = ", ".join(query_parts)
+    # If house number might be at the end, try moving it to the front
+    import re
+    end_number_match = re.search(r'\s+(\d+[A-Za-z]?)\s*$', address.strip())
+    if end_number_match:
+        house_num = end_number_match.group(1)
+        street_part = address[:end_number_match.start()].strip()
+        reordered_address = f"{house_num} {street_part}"
+        reordered_parts = [reordered_address]
+        if city.strip():
+            reordered_parts.append(city.strip())
+        if state.strip():
+            reordered_parts.append(state.strip())
+        if zip_code.strip():
+            reordered_parts.append(zip_code.strip())
+        queries_to_try.append(", ".join(reordered_parts))
     
-    log_debug(f"Google Maps query: {full_query}", service="address_validation")
+    best_result = None
+    best_confidence = 0
     
-    try:
-        geocode_results = gmaps_client.geocode(full_query)
+    for query_attempt, full_query in enumerate(queries_to_try):
+        log_debug(f"Google Maps query attempt {query_attempt + 1}: {full_query}", service="address_validation")
         
-        if not geocode_results:
-            return None
-        
-        # Use first result
-        result = geocode_results[0]
-        formatted_address = result.get('formatted_address', '')
-        geometry = result.get('geometry', {})
-        location = geometry.get('location', {})
-        components = result.get('address_components', [])
-        
-        # Extract components
-        extracted = {}
-        for component in components:
-            types = component.get('types', [])
-            if 'street_number' in types:
-                extracted['street_number'] = component['long_name']
-            elif 'route' in types:
-                extracted['street_name'] = component['long_name']
-            elif 'locality' in types:
-                extracted['city'] = component['long_name']
-            elif 'administrative_area_level_1' in types:
-                extracted['state'] = component['short_name']
-            elif 'postal_code' in types:
-                extracted['zip_code'] = component['long_name']
-        
-        # Build complete street address
-        if 'street_number' in extracted and 'street_name' in extracted:
-            extracted['address'] = f"{extracted['street_number']} {extracted['street_name']}"
-        
-        log_debug("Google Maps validation successful", {
-            "formatted_address": formatted_address,
-            "extracted_components": extracted
-        }, service="address_validation")
-        
-        return {
-            "formatted_address": formatted_address,
-            "latitude": location.get('lat'),
-            "longitude": location.get('lng'),
-            "place_id": result.get('place_id'),
-            **extracted
-        }
-        
-    except Exception as e:
-        log_debug(f"Google Maps API error: {str(e)}", service="address_validation")
-        raise  # Re-raise to handle in main function
+        try:
+            geocode_results = gmaps_client.geocode(full_query)
+            
+            if not geocode_results:
+                continue
+            
+            # Evaluate each result and pick the best one
+            for result in geocode_results[:3]:  # Check top 3 results
+                confidence = _calculate_confidence_score(result)
+                
+                if confidence > best_confidence:
+                    best_confidence = confidence
+                    best_result = result
+                    
+                    # If we found a very high confidence match, use it
+                    if confidence >= 80:
+                        break
+            
+            # If we found a good result, stop trying other queries
+            if best_confidence >= 70:
+                break
+                
+        except Exception as e:
+            log_debug(f"Google Maps API error on attempt {query_attempt + 1}: {str(e)}", service="address_validation")
+            if query_attempt == len(queries_to_try) - 1:
+                raise  # Only raise on last attempt
+    
+    if not best_result:
+        return None
+    
+    # Process the best result
+    formatted_address = best_result.get('formatted_address', '')
+    geometry = best_result.get('geometry', {})
+    location = geometry.get('location', {})
+    components = best_result.get('address_components', [])
+    
+    # Extract components
+    extracted = {}
+    for component in components:
+        types = component.get('types', [])
+        if 'street_number' in types:
+            extracted['street_number'] = component['long_name']
+        elif 'route' in types:
+            extracted['street_name'] = component['long_name']
+        elif 'locality' in types:
+            extracted['city'] = component['long_name']
+        elif 'administrative_area_level_1' in types:
+            extracted['state'] = component['short_name']
+        elif 'postal_code' in types:
+            extracted['zip_code'] = component['long_name']
+    
+    # Build complete street address
+    if 'street_number' in extracted and 'street_name' in extracted:
+        extracted['address'] = f"{extracted['street_number']} {extracted['street_name']}"
+    
+    log_debug("Google Maps validation successful", {
+        "formatted_address": formatted_address,
+        "extracted_components": extracted,
+        "confidence_score": best_confidence,
+        "location_type": geometry.get('location_type'),
+        "partial_match": best_result.get('partial_match', False)
+    }, service="address_validation")
+    
+    return {
+        "formatted_address": formatted_address,
+        "latitude": location.get('lat'),
+        "longitude": location.get('lng'),
+        "place_id": best_result.get('place_id'),
+        "confidence_score": best_confidence,
+        "location_type": geometry.get('location_type'),
+        "partial_match": best_result.get('partial_match', False),
+        "result_types": best_result.get('types', []),
+        **extracted
+    }
 
 
 def _is_exact_match(original: Dict[str, str], google_result: Dict[str, Any]) -> bool:
@@ -422,6 +477,48 @@ def _format_suggestion(google_result: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def _calculate_confidence_score(google_result: Dict[str, Any]) -> int:
+    """Calculate confidence score for a Google Maps result (0-100)"""
+    score = 0
+    
+    # Location type is the strongest indicator
+    location_type = google_result.get('geometry', {}).get('location_type', '')
+    if location_type == 'ROOFTOP':
+        score += 40  # Most precise - exact location
+    elif location_type == 'RANGE_INTERPOLATED':
+        score += 30  # Good - interpolated between two points
+    elif location_type == 'GEOMETRIC_CENTER':
+        score += 15  # OK - center of a street/route
+    else:  # APPROXIMATE
+        score += 5   # Low confidence
+    
+    # Partial match indicates uncertainty
+    if not google_result.get('partial_match', False):
+        score += 30
+    
+    # Check if it's a complete street address
+    components = google_result.get('address_components', [])
+    has_street_number = False
+    has_street_name = False
+    
+    for component in components:
+        types = component.get('types', [])
+        if 'street_number' in types:
+            has_street_number = True
+        elif 'route' in types:
+            has_street_name = True
+    
+    if has_street_number and has_street_name:
+        score += 20
+    
+    # Result type matters
+    result_types = google_result.get('types', [])
+    if 'street_address' in result_types or 'premise' in result_types:
+        score += 10
+    
+    return min(score, 100)  # Cap at 100
+
+
 def _get_friendly_error_message(error: str) -> str:
     """Convert technical errors to user-friendly messages"""
     error_lower = error.lower()
@@ -476,45 +573,69 @@ def validate_address_for_pipeline(fields: Dict[str, Any]) -> Tuple[Dict[str, Any
 
     # Handle each validation state appropriately for pipeline
     if result.state == "verified":
-        # Perfect Google Maps match - update fields with verified data
+        # High confidence Google Maps match - update fields with verified data
         if result.suggestion:
             suggestion = result.suggestion
             
+            # Update all address fields with Google's standardized version
             if 'address' in fields:
                 fields['address']['value'] = suggestion.get('address', address)
                 fields['address']['requires_human_review'] = False
-                fields['address']['review_notes'] = 'Verified by Google Maps during processing'
-                fields['address']['source'] = 'google_maps_verified'  # Set source for verified addresses
+                fields['address']['review_notes'] = 'Auto-verified by Google Maps (high confidence)'
+                fields['address']['source'] = 'google_maps_verified'
                 
             if 'city' in fields:
                 fields['city']['value'] = suggestion.get('city', city)
                 fields['city']['requires_human_review'] = False
-                fields['city']['review_notes'] = 'Verified by Google Maps during processing'
+                fields['city']['review_notes'] = 'Auto-verified by Google Maps (high confidence)'
                 fields['city']['source'] = 'google_maps_verified'
                 
             if 'state' in fields:
                 fields['state']['value'] = suggestion.get('state', state)
                 fields['state']['requires_human_review'] = False
-                fields['state']['review_notes'] = 'Verified by Google Maps during processing'
+                fields['state']['review_notes'] = 'Auto-verified by Google Maps (high confidence)'
                 fields['state']['source'] = 'google_maps_verified'
                 
             if 'zip_code' in fields:
                 fields['zip_code']['value'] = suggestion.get('zip_code', zip_code)
                 fields['zip_code']['requires_human_review'] = False
-                fields['zip_code']['review_notes'] = 'Verified by Google Maps during processing'
+                fields['zip_code']['review_notes'] = 'Auto-verified by Google Maps (high confidence)'
                 fields['zip_code']['source'] = 'google_maps_verified'
         
-        log_debug("Pipeline: VERIFIED - Google Maps confirmed exact match", service="address_validation")
+        log_debug("Pipeline: VERIFIED - High confidence Google Maps match, auto-applied", service="address_validation")
         return fields, "verified"
         
     elif result.state == "can_be_verified":
-        # Google Maps has suggestions but not perfect match
-        log_debug("Pipeline: CAN_BE_VERIFIED - Google Maps has suggestions", service="address_validation")
+        # Medium confidence - auto-apply the suggestion but note it was standardized
+        log_debug("Pipeline: CAN_BE_VERIFIED - Medium confidence, auto-applying suggestion", service="address_validation")
         
-        # Mark for review so user can see suggestions
-        if 'address' in fields:
-            fields['address']['requires_human_review'] = True
-            fields['address']['review_notes'] = 'Address can be improved with Google Maps suggestions'
+        if result.suggestion:
+            suggestion = result.suggestion
+            
+            # Auto-apply the suggestion since we're fairly confident
+            if 'address' in fields:
+                fields['address']['value'] = suggestion.get('address', address)
+                fields['address']['requires_human_review'] = False
+                fields['address']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
+                fields['address']['source'] = 'google_maps_suggested'
+                
+            if 'city' in fields:
+                fields['city']['value'] = suggestion.get('city', city)
+                fields['city']['requires_human_review'] = False
+                fields['city']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
+                fields['city']['source'] = 'google_maps_suggested'
+                
+            if 'state' in fields:
+                fields['state']['value'] = suggestion.get('state', state)
+                fields['state']['requires_human_review'] = False
+                fields['state']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
+                fields['state']['source'] = 'google_maps_suggested'
+                
+            if 'zip_code' in fields:
+                fields['zip_code']['value'] = suggestion.get('zip_code', zip_code)
+                fields['zip_code']['requires_human_review'] = False
+                fields['zip_code']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
+                fields['zip_code']['source'] = 'google_maps_suggested'
         
         return fields, "can_be_verified"
         
