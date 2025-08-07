@@ -15,7 +15,7 @@ import uvicorn
 from app.services.docai_service import process_image_with_docai
 from app.services.settings_service import get_field_requirements, apply_field_requirements, sync_field_requirements, sync_field_types_and_options
 from app.services.review_service import determine_review_status, validate_field_data
-from app.services.address_service import validate_and_enhance_address
+from app.services.address_validation_service import validate_address_for_pipeline
 from app.services.gemini_service import process_card_with_gemini_v2
 
 # Import existing infrastructure
@@ -504,7 +504,29 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         log_worker_debug("=== STEP 9: ADDRESS VALIDATION ===")
         if not ai_processing_failed:
             # Only validate addresses if Gemini processing succeeded
-            validated_fields = validate_and_enhance_address(gemini_fields)
+            validated_fields, validation_state = validate_address_for_pipeline(gemini_fields)
+            
+            # Handle validation results based on actual Google Maps API response
+            if validation_state == "verified":
+                # Perfect match - set google_maps_verified source
+                for field_name in ['address', 'city', 'state', 'zip_code']:
+                    if field_name in validated_fields:
+                        validated_fields[field_name]['source'] = 'google_maps_verified'
+                
+                log_worker_debug("Address VERIFIED by Google Maps - set google_maps_verified source")
+                
+            elif validation_state == "can_be_verified":
+                log_worker_debug("Address CAN_BE_VERIFIED - Google Maps has suggestions, keeping original sources")
+                
+            elif validation_state == "no_house_number":
+                log_worker_debug("Address NO_HOUSE_NUMBER - missing street number, keeping original sources")
+                
+            else:  # not_verified
+                log_worker_debug("Address NOT_VERIFIED - Google Maps found no match, keeping original sources")
+            
+            log_worker_debug(f"Address validation result: {validation_state}", {
+                "will_set_google_maps_verified": validation_state == "verified"
+            })
             log_worker_debug("Fields After Address Validation", validated_fields, verbose=True)
         else:
             # Skip address validation if AI failed
@@ -771,7 +793,27 @@ async def retry_ai_processing(document_id: str):
             
             # Apply address validation to cleaned Gemini data (same as main pipeline)
             log_worker_debug("Applying address validation to retry results...")
-            validated_fields = validate_and_enhance_address(gemini_fields)
+            validated_fields, validation_state = validate_address_for_pipeline(gemini_fields)
+            
+            # Handle validation results based on actual Google Maps API response
+            if validation_state == "verified":
+                # Perfect match - set google_maps_verified source
+                for field_name in ['address', 'city', 'state', 'zip_code']:
+                    if field_name in validated_fields:
+                        validated_fields[field_name]['source'] = 'google_maps_verified'
+                
+                log_worker_debug("Retry: Address VERIFIED by Google Maps - set google_maps_verified source")
+                
+            elif validation_state == "can_be_verified":
+                log_worker_debug("Retry: Address CAN_BE_VERIFIED - Google Maps has suggestions, keeping original sources")
+                
+            elif validation_state == "no_house_number":
+                log_worker_debug("Retry: Address NO_HOUSE_NUMBER - missing street number, keeping original sources")
+                
+            else:  # not_verified
+                log_worker_debug("Retry: Address NOT_VERIFIED - Google Maps found no match, keeping original sources")
+            
+            log_worker_debug(f"Retry address validation result: {validation_state}")
             log_worker_debug("Retry address validation complete", verbose=True)
             
             # Determine new review status with address-validated data

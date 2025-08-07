@@ -21,6 +21,7 @@ from app.utils.field_utils import filter_combined_fields
 from app.utils.retry_utils import log_debug
 from app.models.address_suggestions import AddressSuggestionsRequest, AddressSuggestionsResponse
 from app.services.address_suggestions_service import get_address_suggestions
+from app.services.address_validation_service import validate_address_realtime
 
 router = APIRouter()
 
@@ -198,6 +199,51 @@ async def get_address_suggestions_endpoint(payload: AddressSuggestionsRequest):
             original_input=payload.dict(),
             validation_attempted=True,
             error=f"Internal server error: {str(e)}"
+        )
+
+@router.post("/address/validate")
+async def validate_address_endpoint(payload: Dict[str, Any] = Body(...)):
+    """
+    New consolidated address validation endpoint
+    
+    Handles the 4-state validation system:
+    - verified: Google Maps confirmed exact match
+    - can_be_verified: Google Maps found suggestion but not exact match  
+    - no_house_number: Address missing house number
+    - not_verified: Could not validate address
+    
+    Used by the new simplified frontend validation flow.
+    """
+    try:
+        address = payload.get("address", "")
+        city = payload.get("city", "")
+        state = payload.get("state", "")
+        zip_code = payload.get("zip_code", "")
+        
+        log_debug("Address validation endpoint called", {
+            "address": address,
+            "city": city,
+            "state": state,
+            "zip_code": zip_code
+        }, service="cards_api")
+        
+        result = validate_address_realtime(address, city, state, zip_code)
+        return JSONResponse(status_code=200, content=result)
+        
+    except Exception as e:
+        log_debug(f"Address validation endpoint failed: {str(e)}", service="cards_api")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "validation": {
+                    "state": "not_verified",
+                    "is_valid": False,
+                    "suggestion": None,
+                    "error": f"Internal server error: {str(e)}",
+                    "original_query": payload
+                }
+            }
         )
 
 @router.post("/cards/manual")
