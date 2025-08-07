@@ -14,13 +14,14 @@ from app.services.cards_service import (
     save_manual_review_service,
     get_cards_service
 )
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.repositories.reviewed_data_repository import upsert_reviewed_data
 # Removed import: canonicalize_fields - no longer using canonicalization
 from app.utils.field_utils import filter_combined_fields
 from app.utils.retry_utils import log_debug
 from app.models.address_suggestions import AddressSuggestionsRequest, AddressSuggestionsResponse
 from app.services.address_suggestions_service import get_address_suggestions
+from app.services.address_validation_service import validate_address_realtime
 
 router = APIRouter()
 
@@ -105,6 +106,7 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
     """
     try:
         # Get current card data
+        supabase_client = get_supabase_client()
         current_card = supabase_client.table("reviewed_data").select("*").eq("document_id", document_id).maybe_single().execute()
         if not current_card or not current_card.data:
             raise HTTPException(status_code=404, detail="Card not found")
@@ -142,10 +144,13 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
         for field_name in REQUIRED_FIELDS:
             field_data = current_fields_data.get(field_name, {})
             if isinstance(field_data, dict):
-                # A field needs review if it's marked as requiring review
+                # A field needs review if it's marked as requiring review AND hasn't been manually reviewed
                 requires_review = field_data.get("requires_human_review", True)
-                if requires_review:
-                    print(f"Field {field_name} needs review")
+                is_manually_reviewed = field_data.get("reviewed", False)
+                
+                # If a field requires review but hasn't been manually marked as reviewed, it still needs review
+                if requires_review and not is_manually_reviewed:
+                    print(f"Field {field_name} needs review (requires_human_review: {requires_review}, manually_reviewed: {is_manually_reviewed})")
                     any_required_field_needs_review = True
                     break
 
@@ -200,16 +205,145 @@ async def get_address_suggestions_endpoint(payload: AddressSuggestionsRequest):
             error=f"Internal server error: {str(e)}"
         )
 
+@router.post("/address/validate")
+async def validate_address_endpoint(payload: Dict[str, Any] = Body(...)):
+    """
+    New consolidated address validation endpoint
+    
+    Handles the 4-state validation system:
+    - verified: Google Maps confirmed exact match
+    - can_be_verified: Google Maps found suggestion but not exact match  
+    - no_house_number: Address missing house number
+    - not_verified: Could not validate address
+    
+    Used by the new simplified frontend validation flow.
+    """
+    try:
+        address = payload.get("address", "")
+        city = payload.get("city", "")
+        state = payload.get("state", "")
+        zip_code = payload.get("zip_code", "")
+        
+        log_debug("Address validation endpoint called", {
+            "address": address,
+            "city": city,
+            "state": state,
+            "zip_code": zip_code
+        }, service="cards_api")
+        
+        result = validate_address_realtime(address, city, state, zip_code)
+        return JSONResponse(status_code=200, content=result)
+        
+    except Exception as e:
+        log_debug(f"Address validation endpoint failed: {str(e)}", service="cards_api")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "validation": {
+                    "state": "not_verified",
+                    "is_valid": False,
+                    "suggestion": None,
+                    "error": f"Internal server error: {str(e)}",
+                    "original_query": payload
+                }
+            }
+        )
+
+@router.post("/mark-field-reviewed/{document_id}")
+async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(...)):
+    """
+    Mark specific fields as manually reviewed
+    
+    Payload should contain:
+    {
+        "field_name": "address",  // or other field name
+        "reviewed": true,         // mark as reviewed
+        "review_notes": "User confirmed address is correct as-is"
+    }
+    
+    This allows users to mark problematic fields (like unverifiable addresses) 
+    as reviewed so the card can move to 'ready for export' state.
+    """
+    try:
+        field_name = payload.get("field_name")
+        reviewed = payload.get("reviewed", True)
+        review_notes = payload.get("review_notes", "Manually marked as reviewed")
+        
+        if not field_name:
+            return JSONResponse(status_code=400, content={"error": "field_name is required"})
+        
+        # Get current card data
+        supabase_client = get_supabase_client()
+        current_card = supabase_client.table("reviewed_data").select("*").eq("document_id", document_id).maybe_single().execute()
+        if not current_card or not current_card.data:
+            raise HTTPException(status_code=404, detail="Card not found")
+        
+        current_fields_data = current_card.data.get("fields", {})
+        
+        # Update the specific field
+        if field_name in current_fields_data:
+            current_fields_data[field_name]["reviewed"] = reviewed
+            current_fields_data[field_name]["review_notes"] = review_notes
+            current_fields_data[field_name]["source"] = "human_review"
+            
+            # If marking as reviewed, also set requires_human_review to False
+            if reviewed:
+                current_fields_data[field_name]["requires_human_review"] = False
+        else:
+            return JSONResponse(status_code=404, content={"error": f"Field '{field_name}' not found"})
+        
+        # Check if any required fields still need review after this update
+        any_required_field_needs_review = False
+        for req_field_name in REQUIRED_FIELDS:
+            field_data = current_fields_data.get(req_field_name, {})
+            if isinstance(field_data, dict):
+                requires_review = field_data.get("requires_human_review", True)
+                is_manually_reviewed = field_data.get("reviewed", False)
+                
+                if requires_review and not is_manually_reviewed:
+                    any_required_field_needs_review = True
+                    break
+        
+        # Update review status
+        review_status = "needs_human_review" if any_required_field_needs_review else "reviewed"
+        
+        # Filter out combined fields before saving
+        filtered_fields = filter_combined_fields(current_fields_data)
+        
+        # Update the card
+        update_data = {
+            "document_id": document_id,
+            "fields": filtered_fields,
+            "review_status": review_status,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "school_id": current_card.data.get("school_id"),
+            "event_id": current_card.data.get("event_id"),
+            "image_path": current_card.data.get("image_path")
+        }
+        
+        response = upsert_reviewed_data(supabase_client, update_data)
+        
+        return JSONResponse(status_code=200, content={
+            "message": f"Field '{field_name}' marked as reviewed",
+            "field_updated": field_name,
+            "reviewed": reviewed,
+            "card_status": review_status,
+            "data": response.data[0] if response.data else None
+        })
+        
+    except Exception as e:
+        print(f"Error marking field as reviewed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/cards/manual")
 async def manual_entry(payload: Dict[str, Any] = Body(...)):
     """
     Create a new manual entry in reviewed_data with review_status='reviewed' and no image.
     Expects: { event_id, school_id, fields: { ... } }
     """
-    if not supabase_client:
-        return JSONResponse(status_code=503, content={"error": "Database client not available."})
-
     try:
+        supabase_client = get_supabase_client()
         event_id = payload.get("event_id")
         school_id = payload.get("school_id")
         fields = payload.get("fields", {})

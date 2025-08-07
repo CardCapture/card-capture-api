@@ -8,7 +8,7 @@ from app.models.card import (
     DeleteCardsPayload,
     MoveCardsPayload
 )
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.repositories.cards_repository import (
     get_cards_db,
     archive_cards_db,
@@ -26,6 +26,7 @@ async def get_cards_service(event_id: str = None, school_id: str = None):
         if event_id:
             log_debug(f"Filtering by event_id: {event_id}", service="cards")
         
+        supabase_client = get_supabase_client()
         result = get_cards_db(supabase_client, event_id)
         log_debug(f"Found {len(result)} reviewed records", service="cards")
         log_debug(f"Returning {len(result)} non-deleted, non-archived records", service="cards")
@@ -39,8 +40,10 @@ async def archive_cards_service(document_ids: List[str]) -> JSONResponse:
     log_archive_debug("=== ARCHIVE CARDS SERVICE START ===")
     log_archive_debug("Received document IDs", document_ids)
     
-    if not supabase_client:
-        error_msg = "Database client not available"
+    try:
+        supabase_client = get_supabase_client()
+    except Exception as e:
+        error_msg = f"Database client not available: {e}"
         log_archive_debug(f"Error: {error_msg}")
         return JSONResponse(status_code=503, content={"error": error_msg})
     
@@ -73,8 +76,10 @@ async def archive_cards_service(document_ids: List[str]) -> JSONResponse:
 
 async def mark_as_exported_service(document_ids: List[str]) -> JSONResponse:
     """Mark cards as exported by document IDs"""
-    if not supabase_client:
-        log_debug("Database client not available", service="cards")
+    try:
+        supabase_client = get_supabase_client()
+    except Exception as e:
+        log_debug(f"Database client not available: {e}", service="cards")
         return JSONResponse(status_code=503, content={"error": "Database client not available."})
     
     if not document_ids:
@@ -93,8 +98,10 @@ async def mark_as_exported_service(document_ids: List[str]) -> JSONResponse:
 
 def delete_cards_service(document_ids: List[str]) -> JSONResponse:
     """Delete cards by document IDs"""
-    if not supabase_client:
-        log_debug("Database client not available", service="cards")
+    try:
+        supabase_client = get_supabase_client()
+    except Exception as e:
+        log_debug(f"Database client not available: {e}", service="cards")
         return JSONResponse(status_code=503, content={"error": "Database client not available."})
     
     if not document_ids:
@@ -110,8 +117,10 @@ def delete_cards_service(document_ids: List[str]) -> JSONResponse:
 
 def move_cards_service(document_ids: List[str], status: str = "reviewed") -> JSONResponse:
     """Move cards to a different status by document IDs"""
-    if not supabase_client:
-        log_debug("Database client not available", service="cards")
+    try:
+        supabase_client = get_supabase_client()
+    except Exception as e:
+        log_debug(f"Database client not available: {e}", service="cards")
         return JSONResponse(status_code=503, content={"error": "Database client not available."})
     
     if not document_ids:

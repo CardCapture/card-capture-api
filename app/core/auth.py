@@ -2,7 +2,7 @@ from fastapi import Request, HTTPException
 from jose import jwt, JWTError
 import os
 from app.repositories.auth_repository import get_user_profile_db
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 
 def log(msg):
     print(f"[auth] {msg}")
@@ -25,6 +25,7 @@ async def get_current_user(request: Request):
             log("❌ User ID not found in token")
             raise HTTPException(status_code=400, detail="User ID not found in token")
         # Fetch the user's profile from the database using the repository
+        supabase_client = get_supabase_client()
         profile = get_user_profile_db(supabase_client, user_id)
         log(f"✅ Authenticated user_id: {user_id}")
         return profile

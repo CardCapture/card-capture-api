@@ -12,10 +12,17 @@ RUN python3 -m venv $VIRTUAL_ENV
 # Set work directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
+# Install system dependencies needed for image processing
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install dependencies  
 COPY requirements.txt .
+# Force cache bust for psutil dependency issue
+RUN echo "Cache bust: $(date)" > /tmp/cache_bust
 RUN pip install --upgrade pip && pip install -r requirements.txt
-RUN pip install fastapi uvicorn
 
 # Copy the rest of the application code
 COPY . .
@@ -24,4 +31,4 @@ COPY . .
 EXPOSE 8080
 
 # Run the worker as a FastAPI app
-CMD python -m app.worker.worker_v2 
+CMD uvicorn app.worker.worker_v2:app --host 0.0.0.0 --port $PORT 

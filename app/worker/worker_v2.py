@@ -7,6 +7,13 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 import re
 
+# Optional psutil import for memory monitoring
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -15,12 +22,12 @@ import uvicorn
 from app.services.docai_service import process_image_with_docai
 from app.services.settings_service import get_field_requirements, apply_field_requirements, sync_field_requirements, sync_field_types_and_options
 from app.services.review_service import determine_review_status, validate_field_data
-from app.services.address_service import validate_and_enhance_address
+from app.services.address_validation_service import validate_address_for_pipeline
 from app.services.gemini_service import process_card_with_gemini_v2
 
 # Import existing infrastructure
 from app.repositories.processing_jobs_repository import update_processing_job
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.repositories.reviewed_data_repository import upsert_reviewed_data
 from app.config import DOCAI_PROCESSOR_ID
 
@@ -48,13 +55,66 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    """Log when the app starts up"""
+    print("🚀 CardCapture Worker API is starting up...", flush=True)
+    print(f"🌐 Environment: PORT={os.environ.get('PORT', 'NOT_SET')}", flush=True)
+    try:
+        # Test basic imports and connections
+        from app.core.clients import get_supabase_client
+        supabase_client = get_supabase_client()
+        print("✅ Supabase client imported and initialized successfully", flush=True)
+        print("✅ CardCapture Worker API startup complete", flush=True)
+    except Exception as e:
+        # Do not crash container on startup; log and allow health endpoint to reflect readiness
+        print(f"⚠️ Startup dependency check failed (continuing): {e}", flush=True)
+
 @app.get("/")
 def root():
     return {"message": "CardCapture Worker API is running"}
 
+@app.get("/health")
+def health_check():
+    """Health check endpoint for Cloud Run"""
+    return {"status": "healthy", "service": "card-capture-worker-v2"}
+
+@app.get("/ready")
+def readiness_check():
+    """Readiness check endpoint - verifies all dependencies are working"""
+    try:
+        # Quick test of critical dependencies
+        from app.core.clients import get_supabase_client
+        supabase_client = get_supabase_client()
+        return {
+            "status": "ready", 
+            "service": "card-capture-worker-v2",
+            "dependencies": {
+                "supabase": "connected",
+                "storage_path": "/tmp writable"
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "not_ready", 
+            "service": "card-capture-worker-v2",
+            "error": str(e)
+        }
+
 def log_worker_debug(message: str, data: Any = None, verbose: bool = False):
     """Write debug message and optional data to worker_v2_debug.log and stdout for Cloud Run."""
     timestamp = datetime.now(timezone.utc).isoformat()
+    
+    # Add memory usage to critical logs
+    if PSUTIL_AVAILABLE and any(keyword in message.lower() for keyword in ['start', 'end', 'error', 'timeout']):
+        try:
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / 1024 / 1024
+            message = f"{message} [Memory: {memory_mb:.1f}MB]"
+        except Exception:
+            pass  # Don't fail logging if psutil fails
+    
     log_entry = f"\n[{timestamp}] {message}\n"
     if data is not None:
         try:
@@ -62,15 +122,23 @@ def log_worker_debug(message: str, data: Any = None, verbose: bool = False):
             log_entry += json.dumps(data, indent=2, default=str) + "\n"
         except Exception as e:
             log_entry += f"[Could not serialize data: {e}]\n{str(data)}\n"
-    # Write to file
-    with open('worker_v2_debug.log', 'a') as f:
-        f.write(log_entry)
+    # Write to file (in /tmp for Cloud Run compatibility)
+    log_file_path = '/tmp/worker_v2_debug.log'
+    try:
+        with open(log_file_path, 'a') as f:
+            f.write(log_entry)
+    except Exception as log_error:
+        # If file logging fails, just continue with stdout logging
+        print(f"Warning: Could not write to log file: {log_error}", flush=True)
     # Also print to stdout for Cloud Run logging
     print(log_entry, flush=True)
 
 def download_from_supabase(file_url: str, local_path: str) -> None:
     """Download file from Supabase storage to local path"""
     try:
+        # Initialize Supabase client
+        supabase_client = get_supabase_client()
+        
         # Extract bucket and file path from URL
         # Format: "bucket-name/path/to/file.ext"
         url_parts = file_url.split('/', 1)  # Split only on first slash
@@ -357,10 +425,16 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         "File URL": file_url
     })
     
+    # Initialize Supabase client
+    supabase_client = get_supabase_client()
+    
     tmp_file = None
+    trimmed_image_path = None
+    
     try:
         # Step 1: Get school field requirements
         log_worker_debug("=== STEP 1: GET FIELD REQUIREMENTS ===")
+        supabase_client = get_supabase_client()
         school_query = supabase_client.table("schools").select("docai_processor_id").eq("id", school_id).maybe_single().execute()
         processor_id = school_query.data.get("docai_processor_id") if school_query and school_query.data else DOCAI_PROCESSOR_ID
         log_worker_debug(f"Using DocAI processor: {processor_id}")
@@ -434,6 +508,8 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         
         # Step 7: Fetch valid majors
         log_worker_debug("=== STEP 7: FETCH VALID MAJORS ===")
+        supabase_client = get_supabase_client()
+        supabase_client = get_supabase_client()
         majors_query = supabase_client.table("schools").select("majors").eq("id", school_id).maybe_single().execute()
         valid_majors = majors_query.data.get("majors") if majors_query and majors_query.data and majors_query.data.get("majors") else []
         log_worker_debug("Valid majors", valid_majors, verbose=True)
@@ -504,7 +580,29 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         log_worker_debug("=== STEP 9: ADDRESS VALIDATION ===")
         if not ai_processing_failed:
             # Only validate addresses if Gemini processing succeeded
-            validated_fields = validate_and_enhance_address(gemini_fields)
+            validated_fields, validation_state = validate_address_for_pipeline(gemini_fields)
+            
+            # Handle validation results based on actual Google Maps API response
+            if validation_state == "verified":
+                # Perfect match - set google_maps_verified source
+                for field_name in ['address', 'city', 'state', 'zip_code']:
+                    if field_name in validated_fields:
+                        validated_fields[field_name]['source'] = 'google_maps_verified'
+                
+                log_worker_debug("Address VERIFIED by Google Maps - set google_maps_verified source")
+                
+            elif validation_state == "can_be_verified":
+                log_worker_debug("Address CAN_BE_VERIFIED - Google Maps has suggestions, keeping original sources")
+                
+            elif validation_state == "no_house_number":
+                log_worker_debug("Address NO_HOUSE_NUMBER - missing street number, keeping original sources")
+                
+            else:  # not_verified
+                log_worker_debug("Address NOT_VERIFIED - Google Maps found no match, keeping original sources")
+            
+            log_worker_debug(f"Address validation result: {validation_state}", {
+                "will_set_google_maps_verified": validation_state == "verified"
+            })
             log_worker_debug("Fields After Address Validation", validated_fields, verbose=True)
         else:
             # Skip address validation if AI failed
@@ -546,6 +644,14 @@ def process_job_v2(job: Dict[str, Any]) -> None:
             log_worker_debug(f"Trimmed image uploaded to Supabase: {trimmed_storage_path}")
         except Exception as e:
             log_worker_debug(f"Failed to upload trimmed image to Supabase: {e}")
+        
+        # Clean up trimmed image file immediately after upload
+        if trimmed_image_path and os.path.exists(trimmed_image_path):
+            try:
+                os.remove(trimmed_image_path)
+                log_worker_debug(f"Cleaned up trimmed image file: {trimmed_image_path}")
+            except Exception as cleanup_error:
+                log_worker_debug(f"Warning: Failed to clean up trimmed image: {cleanup_error}")
         
         # Step 12: Update job status and create review data
         log_worker_debug("=== STEP 12: UPDATE JOB STATUS ===")
@@ -621,12 +727,27 @@ def process_job_v2(job: Dict[str, Any]) -> None:
             "updated_at": now
         })
         
-        # Clean up temporary files
-        if os.path.exists(tmp_file):
-            os.remove(tmp_file)
-            log_worker_debug(f"Cleaned up temporary file: {tmp_file}")
-        
         raise
+        
+    finally:
+        # Comprehensive cleanup - always runs whether success or failure
+        cleanup_files = []
+        if tmp_file and os.path.exists(tmp_file):
+            cleanup_files.append(tmp_file)
+        if trimmed_image_path and os.path.exists(trimmed_image_path):
+            cleanup_files.append(trimmed_image_path)
+        
+        for file_path in cleanup_files:
+            try:
+                os.remove(file_path)
+                log_worker_debug(f"Cleaned up temporary file: {file_path}")
+            except Exception as cleanup_error:
+                log_worker_debug(f"Warning: Failed to clean up {file_path}: {cleanup_error}")
+        
+        # Force garbage collection to free memory
+        import gc
+        gc.collect()
+        log_worker_debug("Forced garbage collection completed")
 
 def main_v2():
     """
@@ -638,6 +759,7 @@ def main_v2():
         log_worker_debug("=== CHECKING FOR QUEUED JOBS ===")
         
         # Get next queued job
+        supabase_client = get_supabase_client()
         jobs = supabase_client.table("processing_jobs").select("*").eq("status", "queued").order("created_at").limit(1).execute()
         
         if jobs.data and len(jobs.data) > 0:
@@ -663,6 +785,11 @@ def main_v2():
         log_worker_debug("Worker traceback", traceback.format_exc())
         time.sleep(SLEEP_SECONDS)
 
+@app.get("/process")
+def process_get_endpoint():
+    """GET endpoint for health checks - returns service status"""
+    return {"message": "Worker is ready", "method": "POST", "status": "healthy"}
+
 @app.post("/process")
 async def process_job_endpoint(request: Request):
     try:
@@ -682,6 +809,7 @@ async def process_job_endpoint(request: Request):
         log_worker_debug(f"Processing job_id: {job_id}")
         
         # Fetch the job details from Supabase
+        supabase_client = get_supabase_client()
         job_query = supabase_client.table("processing_jobs").select("*").eq("id", job_id).maybe_single().execute()
         
         if not job_query.data:
@@ -718,6 +846,7 @@ async def retry_ai_processing(document_id: str):
         log_worker_debug(f"=== RETRY AI PROCESSING FOR {document_id} ===")
         
         # Get the reviewed_data record
+        supabase_client = get_supabase_client()
         review_query = supabase_client.table("reviewed_data").select("*").eq("document_id", document_id).maybe_single().execute()
         if not review_query.data:
             log_worker_debug(f"Card {document_id} not found in reviewed_data")
@@ -771,7 +900,27 @@ async def retry_ai_processing(document_id: str):
             
             # Apply address validation to cleaned Gemini data (same as main pipeline)
             log_worker_debug("Applying address validation to retry results...")
-            validated_fields = validate_and_enhance_address(gemini_fields)
+            validated_fields, validation_state = validate_address_for_pipeline(gemini_fields)
+            
+            # Handle validation results based on actual Google Maps API response
+            if validation_state == "verified":
+                # Perfect match - set google_maps_verified source
+                for field_name in ['address', 'city', 'state', 'zip_code']:
+                    if field_name in validated_fields:
+                        validated_fields[field_name]['source'] = 'google_maps_verified'
+                
+                log_worker_debug("Retry: Address VERIFIED by Google Maps - set google_maps_verified source")
+                
+            elif validation_state == "can_be_verified":
+                log_worker_debug("Retry: Address CAN_BE_VERIFIED - Google Maps has suggestions, keeping original sources")
+                
+            elif validation_state == "no_house_number":
+                log_worker_debug("Retry: Address NO_HOUSE_NUMBER - missing street number, keeping original sources")
+                
+            else:  # not_verified
+                log_worker_debug("Retry: Address NOT_VERIFIED - Google Maps found no match, keeping original sources")
+            
+            log_worker_debug(f"Retry address validation result: {validation_state}")
             log_worker_debug("Retry address validation complete", verbose=True)
             
             # Determine new review status with address-validated data
@@ -790,6 +939,7 @@ async def retry_ai_processing(document_id: str):
             
             # Update reviewed_data with successful results
             now = datetime.now(timezone.utc).isoformat()
+            supabase_client = get_supabase_client()
             update_result = supabase_client.table("reviewed_data").update({
                 "fields": filtered_fields,            # Now has proper Gemini data without combined fields
                 "review_status": new_review_status,   # Proper review status
@@ -820,6 +970,5 @@ async def retry_ai_processing(document_id: str):
         raise HTTPException(status_code=500, detail=f"Retry failed: {str(e)}")
 
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port) 
+# Remove the main block - let Cloud Run handle uvicorn startup
+# The Dockerfile.worker already has: CMD uvicorn app.worker.worker_v2:app --host 0.0.0.0 --port $PORT 

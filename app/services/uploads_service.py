@@ -4,10 +4,9 @@ import tempfile
 import uuid
 import time
 from fastapi.responses import JSONResponse, FileResponse
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client, docai_client
 from app.utils.image_processing import ensure_trimmed_image
 from app.utils.storage import upload_to_supabase_storage_from_path
-from app.core.clients import supabase_client, docai_client
 from app.repositories.uploads_repository import (
     insert_processing_job_db,
     insert_extracted_data_db,
@@ -68,6 +67,9 @@ def split_pdf_to_pngs(pdf_path, output_dir=None):
 
 async def upload_file_service(file, school_id, event_id, user):
     try:
+        # Initialize Supabase client
+        supabase_client = get_supabase_client()
+        
         if not file:
             return JSONResponse(status_code=400, content={"error": "No file uploaded."})
         
@@ -196,6 +198,9 @@ async def handle_pdf_upload(pdf_path: str, original_filename: str, school_id: st
     Handle PDF upload by splitting into individual PNG files and creating separate jobs
     """
     try:
+        # Initialize Supabase client
+        supabase_client = get_supabase_client()
+        
         log_debug(f"Entering PDF processing block for file: {original_filename}", {
             "pdf_path": pdf_path,
             "original_filename": original_filename
@@ -309,6 +314,7 @@ async def handle_pdf_upload(pdf_path: str, original_filename: str, school_id: st
 
 async def check_upload_status_service(job_id: str):
     try:
+        supabase_client = get_supabase_client()
         result = supabase_client.table("processing_jobs").select("*").eq("id", job_id).execute()
         if result.data:
             return JSONResponse(status_code=200, content=result.data[0])
@@ -350,6 +356,9 @@ async def get_image_service(document_id: str):
 
 async def export_to_slate_service(payload: dict):
     try:
+        # Initialize Supabase client
+        supabase_client = get_supabase_client()
+        
         # Check if SFTP functionality is available
         if not SFTP_AVAILABLE:
             return JSONResponse(status_code=503, content={

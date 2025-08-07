@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from fastapi.responses import JSONResponse
 from app.repositories.schools_repository import get_school_by_id_db
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.utils.retry_utils import log_debug
 
 async def get_school_by_id(school_id: str) -> Optional[Dict[str, Any]]:
@@ -18,6 +18,7 @@ async def get_school_by_id(school_id: str) -> Optional[Dict[str, Any]]:
     """
     try:
         log_debug(f"Fetching school with id: {school_id}", service="schools")
+        supabase_client = get_supabase_client()
         response = supabase_client.table("schools").select("*").eq("id", school_id).execute()
         school = response.data[0] if response.data else None
         log_debug(f"School fetched: {school_id}", service="schools")
