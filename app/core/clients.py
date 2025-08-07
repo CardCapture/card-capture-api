@@ -9,14 +9,39 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Missing required Supabase environment variables")
+# Lazy initialization of Supabase clients
+supabase_client = None
+supabase_auth = None
 
-try:
-    supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    supabase_auth = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    raise
+def get_supabase_client():
+    global supabase_client
+    if supabase_client is None:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise ValueError("Missing required Supabase environment variables")
+        try:
+            supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        except Exception as e:
+            raise RuntimeError(f"Failed to create Supabase client: {e}")
+    return supabase_client
+
+def get_supabase_auth():
+    global supabase_auth
+    if supabase_auth is None:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise ValueError("Missing required Supabase environment variables")
+        try:
+            supabase_auth = create_client(SUPABASE_URL, SUPABASE_KEY)
+        except Exception as e:
+            raise RuntimeError(f"Failed to create Supabase auth client: {e}")
+    return supabase_auth
+
+# For backwards compatibility, create clients on first access
+def __getattr__(name):
+    if name == 'supabase_client':
+        return get_supabase_client()
+    elif name == 'supabase_auth':
+        return get_supabase_auth()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 # Document AI
 try:
