@@ -28,12 +28,18 @@ GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 
 # File Storage Configuration
-UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", os.path.join(os.path.dirname(__file__), "uploads/images"))
-TRIMMED_FOLDER = os.environ.get("TRIMMED_FOLDER", os.path.join(os.path.dirname(__file__), "uploads/trimmed"))
+# Use /tmp for Cloud Run compatibility (writable file system)
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads/images")
+TRIMMED_FOLDER = os.environ.get("TRIMMED_FOLDER", "/tmp/uploads/trimmed")
 
-# Ensure folders exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(TRIMMED_FOLDER, exist_ok=True)
+# Ensure folders exist (with error handling for Cloud Run)
+try:
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    os.makedirs(TRIMMED_FOLDER, exist_ok=True)
+except OSError as e:
+    print(f"Warning: Could not create upload folders: {e}. Using /tmp as fallback.")
+    UPLOAD_FOLDER = "/tmp"
+    TRIMMED_FOLDER = "/tmp"
 
 # CORS Configuration
 ALLOWED_ORIGINS = [

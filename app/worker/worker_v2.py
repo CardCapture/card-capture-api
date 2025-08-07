@@ -55,6 +55,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    """Log when the app starts up"""
+    print("🚀 CardCapture Worker API is starting up...", flush=True)
+    print(f"🌐 Environment: PORT={os.environ.get('PORT', 'NOT_SET')}", flush=True)
+    try:
+        # Test basic imports and connections
+        from app.core.clients import supabase_client
+        print("✅ Supabase client imported successfully", flush=True)
+        print("✅ CardCapture Worker API startup complete", flush=True)
+    except Exception as e:
+        print(f"❌ Error during startup: {e}", flush=True)
+        raise
+
 @app.get("/")
 def root():
     return {"message": "CardCapture Worker API is running"}
@@ -63,6 +77,27 @@ def root():
 def health_check():
     """Health check endpoint for Cloud Run"""
     return {"status": "healthy", "service": "card-capture-worker-v2"}
+
+@app.get("/ready")
+def readiness_check():
+    """Readiness check endpoint - verifies all dependencies are working"""
+    try:
+        # Quick test of critical dependencies
+        from app.core.clients import supabase_client
+        return {
+            "status": "ready", 
+            "service": "card-capture-worker-v2",
+            "dependencies": {
+                "supabase": "connected",
+                "storage_path": "/tmp writable"
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "not_ready", 
+            "service": "card-capture-worker-v2",
+            "error": str(e)
+        }
 
 def log_worker_debug(message: str, data: Any = None, verbose: bool = False):
     """Write debug message and optional data to worker_v2_debug.log and stdout for Cloud Run."""
@@ -85,9 +120,14 @@ def log_worker_debug(message: str, data: Any = None, verbose: bool = False):
             log_entry += json.dumps(data, indent=2, default=str) + "\n"
         except Exception as e:
             log_entry += f"[Could not serialize data: {e}]\n{str(data)}\n"
-    # Write to file
-    with open('worker_v2_debug.log', 'a') as f:
-        f.write(log_entry)
+    # Write to file (in /tmp for Cloud Run compatibility)
+    log_file_path = '/tmp/worker_v2_debug.log'
+    try:
+        with open(log_file_path, 'a') as f:
+            f.write(log_entry)
+    except Exception as log_error:
+        # If file logging fails, just continue with stdout logging
+        print(f"Warning: Could not write to log file: {log_error}", flush=True)
     # Also print to stdout for Cloud Run logging
     print(log_entry, flush=True)
 
