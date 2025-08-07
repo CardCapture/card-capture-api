@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 from typing import Dict, Any, List
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.utils.retry_utils import log_debug
 from app.utils.field_utils import get_combined_fields_to_exclude, generate_field_label
 
@@ -13,6 +13,7 @@ def get_field_requirements(school_id: str) -> Dict[str, Dict[str, bool]]:
     log_debug(f"School ID: {school_id}", service="settings")
 
     try:
+        supabase_client = get_supabase_client()
         school_query = supabase_client.table("schools").select("card_fields").eq("id", school_id).maybe_single().execute()
         if school_query and school_query.data:
             card_fields_array = school_query.data.get("card_fields") or []
@@ -161,6 +162,7 @@ def sync_field_requirements(school_id: str, detected_fields: list) -> Dict[str, 
     log_debug("Detected fields", detected_fields, service="settings")
 
     try:
+        supabase_client = get_supabase_client()
         # Initialize updated flag
         updated = False
         
@@ -268,6 +270,7 @@ def sync_field_types_and_options(school_id: str, detected_field_info: Dict[str, 
     }, service="settings")
 
     try:
+        supabase_client = get_supabase_client()
         # Get current school settings as array
         school_query = supabase_client.table("schools").select("card_fields").eq("id", school_id).maybe_single().execute()
         card_fields_array = school_query.data.get("card_fields") or []

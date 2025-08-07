@@ -27,7 +27,7 @@ from app.services.gemini_service import process_card_with_gemini_v2
 
 # Import existing infrastructure
 from app.repositories.processing_jobs_repository import update_processing_job
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.repositories.reviewed_data_repository import upsert_reviewed_data
 from app.config import DOCAI_PROCESSOR_ID
 
@@ -62,8 +62,9 @@ async def startup_event():
     print(f"🌐 Environment: PORT={os.environ.get('PORT', 'NOT_SET')}", flush=True)
     try:
         # Test basic imports and connections
-        from app.core.clients import supabase_client
-        print("✅ Supabase client imported successfully", flush=True)
+        from app.core.clients import get_supabase_client
+        supabase_client = get_supabase_client()
+        print("✅ Supabase client imported and initialized successfully", flush=True)
         print("✅ CardCapture Worker API startup complete", flush=True)
     except Exception as e:
         print(f"❌ Error during startup: {e}", flush=True)
@@ -83,7 +84,8 @@ def readiness_check():
     """Readiness check endpoint - verifies all dependencies are working"""
     try:
         # Quick test of critical dependencies
-        from app.core.clients import supabase_client
+        from app.core.clients import get_supabase_client
+        supabase_client = get_supabase_client()
         return {
             "status": "ready", 
             "service": "card-capture-worker-v2",
@@ -134,6 +136,9 @@ def log_worker_debug(message: str, data: Any = None, verbose: bool = False):
 def download_from_supabase(file_url: str, local_path: str) -> None:
     """Download file from Supabase storage to local path"""
     try:
+        # Initialize Supabase client
+        supabase_client = get_supabase_client()
+        
         # Extract bucket and file path from URL
         # Format: "bucket-name/path/to/file.ext"
         url_parts = file_url.split('/', 1)  # Split only on first slash
@@ -419,6 +424,9 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         "Event ID": event_id,
         "File URL": file_url
     })
+    
+    # Initialize Supabase client
+    supabase_client = get_supabase_client()
     
     tmp_file = None
     trimmed_image_path = None

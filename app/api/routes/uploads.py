@@ -9,7 +9,7 @@ from app.controllers.uploads_controller import (
 from app.core.auth import get_current_user
 from app.services.signup_service import process_signup_sheet
 from app.utils.storage import upload_to_supabase_storage_from_path
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 import tempfile
 import os
 import uuid
@@ -90,6 +90,7 @@ async def upload_signup_sheet(
         
         try:
             # Upload to permanent storage (similar to regular card uploads)
+            supabase_client = get_supabase_client()
             permanent_storage_path = upload_to_supabase_storage_from_path(
                 supabase_client,
                 tmp_file_path,
