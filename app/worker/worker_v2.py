@@ -434,6 +434,7 @@ def process_job_v2(job: Dict[str, Any]) -> None:
     try:
         # Step 1: Get school field requirements
         log_worker_debug("=== STEP 1: GET FIELD REQUIREMENTS ===")
+        supabase_client = get_supabase_client()
         school_query = supabase_client.table("schools").select("docai_processor_id").eq("id", school_id).maybe_single().execute()
         processor_id = school_query.data.get("docai_processor_id") if school_query and school_query.data else DOCAI_PROCESSOR_ID
         log_worker_debug(f"Using DocAI processor: {processor_id}")
@@ -507,6 +508,8 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         
         # Step 7: Fetch valid majors
         log_worker_debug("=== STEP 7: FETCH VALID MAJORS ===")
+        supabase_client = get_supabase_client()
+        supabase_client = get_supabase_client()
         majors_query = supabase_client.table("schools").select("majors").eq("id", school_id).maybe_single().execute()
         valid_majors = majors_query.data.get("majors") if majors_query and majors_query.data and majors_query.data.get("majors") else []
         log_worker_debug("Valid majors", valid_majors, verbose=True)
@@ -756,6 +759,7 @@ def main_v2():
         log_worker_debug("=== CHECKING FOR QUEUED JOBS ===")
         
         # Get next queued job
+        supabase_client = get_supabase_client()
         jobs = supabase_client.table("processing_jobs").select("*").eq("status", "queued").order("created_at").limit(1).execute()
         
         if jobs.data and len(jobs.data) > 0:
@@ -805,6 +809,7 @@ async def process_job_endpoint(request: Request):
         log_worker_debug(f"Processing job_id: {job_id}")
         
         # Fetch the job details from Supabase
+        supabase_client = get_supabase_client()
         job_query = supabase_client.table("processing_jobs").select("*").eq("id", job_id).maybe_single().execute()
         
         if not job_query.data:
@@ -841,6 +846,7 @@ async def retry_ai_processing(document_id: str):
         log_worker_debug(f"=== RETRY AI PROCESSING FOR {document_id} ===")
         
         # Get the reviewed_data record
+        supabase_client = get_supabase_client()
         review_query = supabase_client.table("reviewed_data").select("*").eq("document_id", document_id).maybe_single().execute()
         if not review_query.data:
             log_worker_debug(f"Card {document_id} not found in reviewed_data")
@@ -933,7 +939,8 @@ async def retry_ai_processing(document_id: str):
             
             # Update reviewed_data with successful results
             now = datetime.now(timezone.utc).isoformat()
-            update_result = supabase_client.table("reviewed_data").update({
+        supabase_client = get_supabase_client()
+        update_result = supabase_client.table("reviewed_data").update({
                 "fields": filtered_fields,            # Now has proper Gemini data without combined fields
                 "review_status": new_review_status,   # Proper review status
                 "ai_error_message": None,            # Clear the error
