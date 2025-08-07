@@ -1,6 +1,6 @@
 from fastapi.responses import JSONResponse
 from fastapi import HTTPException, status
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.repositories.events_repository import (
     insert_event_db,
     update_event_db,
@@ -31,8 +31,10 @@ def can_archive_events(user):
     return any(role in user_roles for role in ["admin", "recruiter"])
 
 async def create_event_service(payload):
-    if not supabase_client:
-        log_debug("Database client not available", service="events")
+    try:
+        supabase_client = get_supabase_client()
+    except Exception as e:
+        log_debug(f"Database client not available: {e}", service="events")
         return JSONResponse(status_code=503, content={"error": "Database client not available."})
     try:
         # Debug logging
@@ -67,8 +69,10 @@ async def update_event_service(event_id: str, payload, user):
     if not is_admin(user):
         log_debug("Only admins can update event names", service="events")
         raise HTTPException(status_code=403, detail="Only admins can update event names.")
-    if not supabase_client:
-        log_debug("Database client not available", service="events")
+    try:
+        supabase_client = get_supabase_client()
+    except Exception as e:
+        log_debug(f"Database client not available: {e}", service="events")
         return JSONResponse(status_code=503, content={"error": "Database client not available."})
     try:
         result = update_event_db(supabase_client, event_id, {"name": payload.name})
@@ -82,8 +86,10 @@ async def update_event_service(event_id: str, payload, user):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 async def archive_events_service(payload):
-    if not supabase_client:
-        log_debug("Database client not available", service="events")
+    try:
+        supabase_client = get_supabase_client()
+    except Exception as e:
+        log_debug(f"Database client not available: {e}", service="events")
         return JSONResponse(status_code=503, content={"error": "Database client not available."})
     try:
         archived_count = 0
@@ -138,8 +144,10 @@ async def delete_event_service(event_id: str, user):
     if not is_admin(user):
         log_debug("Only admins can delete events", service="events")
         raise HTTPException(status_code=403, detail="Only admins can delete events.")
-    if not supabase_client:
-        log_debug("Database client not available", service="events")
+    try:
+        supabase_client = get_supabase_client()
+    except Exception as e:
+        log_debug(f"Database client not available: {e}", service="events")
         return JSONResponse(status_code=503, content={"error": "Database client not available."})
     try:
         reviewed, extracted, event = delete_event_and_cards_db(supabase_client, event_id)
