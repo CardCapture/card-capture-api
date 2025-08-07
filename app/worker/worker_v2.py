@@ -67,8 +67,8 @@ async def startup_event():
         print("✅ Supabase client imported and initialized successfully", flush=True)
         print("✅ CardCapture Worker API startup complete", flush=True)
     except Exception as e:
-        print(f"❌ Error during startup: {e}", flush=True)
-        raise
+        # Do not crash container on startup; log and allow health endpoint to reflect readiness
+        print(f"⚠️ Startup dependency check failed (continuing): {e}", flush=True)
 
 @app.get("/")
 def root():
