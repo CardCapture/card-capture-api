@@ -580,6 +580,10 @@ def process_job_v2(job: Dict[str, Any]) -> None:
         log_worker_debug("=== STEP 9: ADDRESS VALIDATION ===")
         if not ai_processing_failed:
             # Only validate addresses if Gemini processing succeeded
+            # Null-safe normalization for address components
+            for _k in ['address', 'city', 'state', 'zip_code']:
+                if _k in gemini_fields and isinstance(gemini_fields[_k], dict):
+                    gemini_fields[_k]['value'] = (gemini_fields[_k].get('value') or '')
             validated_fields, validation_state = validate_address_for_pipeline(gemini_fields)
             
             # Handle validation results based on actual Google Maps API response
@@ -900,6 +904,9 @@ async def retry_ai_processing(document_id: str):
             
             # Apply address validation to cleaned Gemini data (same as main pipeline)
             log_worker_debug("Applying address validation to retry results...")
+            for _k in ['address', 'city', 'state', 'zip_code']:
+                if _k in gemini_fields and isinstance(gemini_fields[_k], dict):
+                    gemini_fields[_k]['value'] = (gemini_fields[_k].get('value') or '')
             validated_fields, validation_state = validate_address_for_pipeline(gemini_fields)
             
             # Handle validation results based on actual Google Maps API response
