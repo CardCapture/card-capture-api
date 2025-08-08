@@ -543,11 +543,17 @@ def validate_address_for_pipeline(fields: Dict[str, Any]) -> Tuple[Dict[str, Any
     - ValidationState indicating what happened: "verified", "can_be_verified", "no_house_number", "not_verified"
     """
     
-    # Extract address components from fields
-    address = fields.get('address', {}).get('value', '')
-    city = fields.get('city', {}).get('value', '')
-    state = fields.get('state', {}).get('value', '')
-    zip_code = fields.get('zip_code', {}).get('value', '')
+    # Extract address components from fields (null-safe)
+    def _get_value(fd: Optional[Dict[str, Any]]) -> str:
+        try:
+            return ((fd or {}).get('value') or '').strip()
+        except Exception:
+            return ''
+
+    address = _get_value(fields.get('address'))
+    city = _get_value(fields.get('city'))
+    state = _get_value(fields.get('state'))
+    zip_code = _get_value(fields.get('zip_code'))
     
     log_debug("Pipeline address validation", {
         "address": address,
@@ -658,7 +664,8 @@ def validate_address_for_pipeline(fields: Dict[str, Any]) -> Tuple[Dict[str, Any
             if field_name in fields:
                 field_data = fields[field_name]
                 if field_data.get('required', False):
-                    if not field_data.get('value', '').strip():
+                    value_str = _get_value(field_data)
+                    if not value_str:
                         field_data['requires_human_review'] = True
                         field_data['review_notes'] = f"Required {field_name} field is empty"
                     elif field_name == 'address':
