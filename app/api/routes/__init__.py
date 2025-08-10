@@ -11,6 +11,7 @@ from .superadmin import router as superadmin_router
 from .sftp import router as sftp_router
 from .demo import router as demo_router
 from .crm_events import router as crm_events_router
+from .students import router as students_router
 
 __all__ = [
     'cards_router',
@@ -24,4 +25,5 @@ __all__ = [
     'sftp_router',
     'demo_router',
     'crm_events_router',
+    'students_router',
 ] 

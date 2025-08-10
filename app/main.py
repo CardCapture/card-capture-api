@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import cards_router, auth_router, uploads_router, events_router, users_router, schools_router, stripe_router, superadmin_router, sftp_router, demo_router, crm_events_router
+from app.api.routes import cards_router, auth_router, uploads_router, events_router, users_router, schools_router, stripe_router, superadmin_router, sftp_router, demo_router, crm_events_router, students_router
 from app.config import ALLOWED_ORIGINS
 from app.core.error_handling import register_exception_handlers
 
@@ -29,6 +29,7 @@ app.include_router(superadmin_router)
 app.include_router(sftp_router, prefix="/sftp")
 app.include_router(demo_router)
 app.include_router(crm_events_router)
+app.include_router(students_router)
 
 @app.get("/")
 async def root():
