@@ -105,7 +105,7 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
                 "✅ Always include the mapped_major field.", 
                 "✅ Only include fields that are relevant to this card."
             ).replace(
-                "**Mapped Major** – Use the provided valid_majors list to match the `mapped_major` to the major on the card. IMPORTANT: Always preserve the original `major` field value exactly as written on the card - do not change or null it out. Only update the separate `mapped_major` field. If no close match exists in valid_majors, leave `mapped_major` blank and explain. If the original `major` field is empty, default `mapped_major` to \"Undecided\".",
+                "**Mapped Major** – Use the provided valid_majors list to match the `mapped_major` to the major on the card. IMPORTANT: Always preserve the original `major` field value exactly as written on the card - do not change or null it out. Only update the separate `mapped_major` field. If no close match exists in valid_majors, leave `mapped_major` blank (the system will automatically set it to \"Undecided\"). If the original `major` field is empty, default `mapped_major` to \"Undecided\".",
                 "**Major Field** – Extract the major exactly as written on the card. Do not modify or map the value."
             )
             prompt = modified_template.format(
@@ -204,17 +204,18 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
             # Backend safeguard: ensure mapped_major is present only if school has majors configured
             if valid_majors and 'mapped_major' not in enhanced_fields:
                 enhanced_fields['mapped_major'] = {
-                    "value": "",
+                    "value": "Undecided",  # Default to Undecided if missing
                     "edit_made": False,
                     "edit_type": "mapped_value",
                     "original_value": "",
                     "text_clarity": "clear",
                     "certainty": "certain",
-                    "notes": "",
+                    "notes": "Field was missing - defaulted to Undecided",
                     "review_confidence": 0.0,
                     "requires_human_review": False,
-                    "review_notes": ""
+                    "review_notes": "Automatically set to Undecided - mapped_major field was missing"
                 }
+                log_debug("Created missing mapped_major field with 'Undecided' default", service="gemini")
             # Backend safeguard: ensure major is user's input, not mapped value (only if school has majors)
             if valid_majors and 'major' in enhanced_fields and 'mapped_major' in enhanced_fields:
                 user_major_original = (docai_fields.get('major', {}).get('value') or '').strip().lower()
@@ -223,6 +224,16 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
                 # If Gemini set major to a mapped value, but user input was different, restore user input
                 if mapped_major and gemini_major == mapped_major and user_major_original and user_major_original != mapped_major:
                     enhanced_fields['major']['value'] = docai_fields['major']['value']
+                    
+                # Backend safeguard: If mapped_major is blank/empty but we have valid majors, 
+                # always default to "Undecided" for unmappable majors
+                if not mapped_major and valid_majors:
+                    enhanced_fields['mapped_major']['value'] = "Undecided"
+                    enhanced_fields['mapped_major']['review_notes'] = "Automatically set to Undecided - major could not be mapped to available options"
+                    log_debug("Set mapped_major to 'Undecided' for unmappable major", {
+                        "original_major": enhanced_fields['major'].get('value', ''),
+                        "available_majors_count": len(valid_majors)
+                    }, service="gemini")
         except json.JSONDecodeError as e:
             log_debug(f"JSON parsing error: {str(e)}", service="gemini")
             log_debug("Failed to parse response as JSON. Response text:", response.text, service="gemini")
