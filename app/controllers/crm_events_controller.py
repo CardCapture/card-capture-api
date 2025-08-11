@@ -120,11 +120,22 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
         contents = await file.read()
         csv_text = contents.decode('utf-8')
         csv_reader = csv.DictReader(io.StringIO(csv_text))
+        # Normalize header names to avoid BOM/whitespace mismatches with FE mapping
+        if csv_reader.fieldnames:
+            csv_reader.fieldnames = [
+                (fn or "").strip().replace("\ufeff", "") for fn in csv_reader.fieldnames
+            ]
         
-        # Convert to list to get total count
-        csv_rows = list(csv_reader)
+        # Convert to list to get total count, then filter out blank rows
+        raw_rows = list(csv_reader)
+        raw_total = len(raw_rows)
+        # Remove rows that are entirely empty/whitespace
+        csv_rows = [
+            row for row in raw_rows
+            if row and any(str(value or "").strip() for value in row.values())
+        ]
         total_rows = len(csv_rows)
-        print(f"📊 Processing {total_rows} CSV rows")
+        print(f"📊 Processing {total_rows} CSV rows (received {raw_total}, skipped {raw_total - total_rows} blank rows)")
         
         # Process each row
         results = {
@@ -138,14 +149,23 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
         print("🔍 Parsing and validating CSV data...")
         events_to_create = []
         
+        # Pre-normalize mapping keys for consistent lookup
+        norm_map = {
+            key: (mapping.get(key, "") or "").strip()
+            for key in ("name", "date", "crm_id")
+        }
+        norm_map = {k: v.replace("\ufeff", "") for k, v in norm_map.items()}
+
         for row_num, row in enumerate(csv_rows, start=2):
             try:
+                # Normalize row keys (trim and strip BOM)
+                norm_row = { (k or "").strip().replace("\ufeff", ""): (v or "") for k, v in row.items() }
                 # Map columns based on user's mapping
                 event_data = {
                     "school_id": school_id,
-                    "name": row.get(mapping.get("name", ""), "").strip(),
-                    "event_date": row.get(mapping.get("date", ""), "").strip(),
-                    "crm_event_id": row.get(mapping.get("crm_id", ""), "").strip(),
+                    "name": norm_row.get(norm_map.get("name", ""), "").strip(),
+                    "event_date": norm_row.get(norm_map.get("date", ""), "").strip(),
+                    "crm_event_id": norm_row.get(norm_map.get("crm_id", ""), "").strip(),
                     "source": "csv"
                 }
                 
@@ -220,8 +240,8 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
                         })
         
         # Log summary
-        total_rows = results["created"] + results["updated"] + results["skipped"] + len(results["errors"])
-        print(f"CSV Import Summary - Total rows: {total_rows}, Created: {results['created']}, Updated: {results['updated']}, Skipped: {results['skipped']}, Errors: {len(results['errors'])}")
+        processed_total = results["created"] + results["updated"] + results["skipped"] + len(results["errors"])
+        print(f"CSV Import Summary - Total rows: {processed_total}, Created: {results['created']}, Updated: {results['updated']}, Skipped: {results['skipped']}, Errors: {len(results['errors'])}")
         
         response_data = {
             "success": True,
