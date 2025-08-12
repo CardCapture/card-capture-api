@@ -50,14 +50,135 @@ def _notify_student_email(email: Optional[str], qr_data_uri: str, token: str, is
         log_debug(f"Resend email send failed (non-fatal): {str(e)}", service="students")
 
 
+def _parse_date_of_birth(raw: Any) -> Optional[str]:
+    """Normalize incoming DOB values to YYYY-MM-DD when possible."""
+    if not raw:
+        return None
+    s = str(raw).strip()
+    # Already ISO-like
+    if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+        return s[:10]
+    # MM/DD/YYYY
+    if '/' in s:
+        parts = s.split('/')
+        if len(parts) == 3 and all(parts):
+            mm, dd, yyyy = parts
+            try:
+                mm_i = int(mm)
+                dd_i = int(dd)
+                yyyy_i = int(yyyy)
+                return f"{yyyy_i:04d}-{mm_i:02d}-{dd_i:02d}"
+            except Exception:
+                return None
+    # MMDDYYYY (8 digits)
+    if s.isdigit() and len(s) == 8:
+        try:
+            mm_i = int(s[0:2])
+            dd_i = int(s[2:4])
+            yyyy_i = int(s[4:8])
+            return f"{yyyy_i:04d}-{mm_i:02d}-{dd_i:02d}"
+        except Exception:
+            return None
+    return None
+
+
+def _normalize_student_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Map legacy FE keys to canonical columns and drop unknowns.
+
+    Unknown keys are placed into `extras` JSONB so no data is lost.
+    """
+    mapping = {
+        "mobile": "cell",
+        "address1": "address",
+        "address2": "address_2",
+        "zip": "zip_code",
+        "dob": "date_of_birth",
+        "start_term": "entry_term",
+        "start_year": "entry_year",
+        "sms_opt_in": "permission_to_text",
+    }
+
+    normalized: Dict[str, Any] = {}
+    extras: Dict[str, Any] = {}
+
+    # Allowed canonical keys in students table
+    allowed = {
+        "id",
+        # identity
+        "first_name",
+        "last_name",
+        "preferred_first_name",
+        # contact/consent
+        "email",
+        "cell",
+        "email_opt_in",
+        "permission_to_text",
+        # address
+        "address",
+        "address_2",
+        "city",
+        "state",
+        "zip_code",
+        # demographic
+        "date_of_birth",
+        "high_school",
+        "grade_level",
+        "grad_year",
+        # academics
+        "gpa",
+        "gpa_scale",
+        "sat_score",
+        "act_score",
+        # enrollment
+        "student_type",
+        "entry_term",
+        "entry_year",
+        # interests
+        "major",
+        "academic_interests",
+        "intended_majors",
+        # misc
+        "extras",
+        "created_at",
+        "updated_at",
+    }
+
+    for key, value in (payload or {}).items():
+        target = mapping.get(key, key)
+        if target == "date_of_birth":
+            parsed = _parse_date_of_birth(value)
+            value = parsed if parsed else value
+        if target in allowed:
+            normalized[target] = value
+        else:
+            # Keep unknowns in extras to avoid hard failures (e.g., academic_interests_text)
+            extras[target] = value
+
+    # If academic_interests_text present and academic_interests missing, carry it over as a single string entry
+    if "academic_interests" not in normalized and "academic_interests_text" in extras:
+        ait = str(extras.get("academic_interests_text") or "").strip()
+        if ait:
+            normalized["academic_interests"] = [ait]
+
+    # Merge any provided extras
+    existing_extras = normalized.get("extras") or {}
+    if isinstance(existing_extras, dict):
+        normalized["extras"] = {**existing_extras, **extras}
+    else:
+        normalized["extras"] = extras
+
+    return normalized
+
+
 async def register_student(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Create or update a student, generate a fresh QR token, email it, and return QR."""
     log_debug("Register student called", payload, service="students")
     email = (payload.get("email") or "").strip()
     existing = get_student_by_email(email) if email else None
 
-    # If existing, preserve its id on upsert
-    student_in = {**(existing or {}), **payload}
+    # If existing, preserve its id on upsert; map incoming keys to canonical columns
+    normalized_payload = _normalize_student_payload(payload)
+    student_in = {**(existing or {}), **normalized_payload}
     student = upsert_student(student_in)
 
     token = create_token_for_student(student["id"])
@@ -134,30 +255,40 @@ def _student_to_reviewed_fields(s: Dict[str, Any]) -> Dict[str, Any]:
     def f(v):
         return _field(v) if v not in (None, "") else None
 
+    # Prefer canonical columns in students table
+    academic_list = s.get("academic_interests") or s.get("intended_majors")
+    if isinstance(academic_list, list):
+        academic_joined = ", ".join([
+            str(x)
+            for x in academic_list
+            if str(x).strip() != ""
+        ])
+    else:
+        academic_joined = str(academic_list) if academic_list not in (None, "") else None
+
     mapping = {
         "first_name": f(s.get("first_name")),
         "last_name": f(s.get("last_name")),
         "email": f(s.get("email")),
-        "cell": f(s.get("mobile")),
-        "date_of_birth": f(s.get("dob")),
-        "address": f(s.get("address1")),
-        "address_2": f(s.get("address2")),
+        "cell": f(s.get("cell")),
+        "permission_to_text": f("Yes" if s.get("permission_to_text") is True else ("No" if s.get("permission_to_text") is False else None)),
+        "date_of_birth": f(s.get("date_of_birth")),
+        "address": f(s.get("address")),
+        "address_2": f(s.get("address_2")),
         "city": f(s.get("city")),
         "state": f(s.get("state")),
-        "zip_code": f(s.get("zip")),
-        "current_school": f(s.get("high_school")),
-        "grade": f(s.get("grade_level")),
+        "zip_code": f(s.get("zip_code")),
+        "high_school": f(s.get("high_school")),
+        "grade_level": f(s.get("grade_level")),
         "grad_year": f(s.get("grad_year")),
         "gpa": f(s.get("gpa")),
         "gpa_scale": f(s.get("gpa_scale")),
         "sat_score": f(s.get("sat_score")),
         "act_score": f(s.get("act_score")),
-        "academic_interests": f(
-            ", ".join(s.get("academic_interests") or s.get("intended_majors") or [])
-        ),
-        "start_college_term": f(
-            f"{s.get('start_term', '')} {s.get('start_year', '')}".strip()
-        ),
+        "academic_interests": f(academic_joined),
+        "entry_term": f(s.get("entry_term")),
+        "entry_year": f(s.get("entry_year")),
+        "major": f(s.get("major")),
     }
 
     return {k: v for k, v in mapping.items() if v is not None}

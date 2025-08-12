@@ -357,6 +357,59 @@ def prepare_docai_for_review(docai_fields: Dict[str, Any]) -> Dict[str, Any]:
     
     return prepared_fields
 
+
+def ensure_name_components(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure first_name and last_name exist if only a combined name is present.
+
+    - If first_name/last_name already have non-empty values, do nothing.
+    - Else, if a combined `name` exists, split it into first and last.
+    - Always preserve the original `name` field; this function only adds missing canonical keys.
+    """
+    try:
+        # Check if canonical name parts already present
+        first_present = isinstance(fields.get("first_name"), dict) and bool(fields["first_name"].get("value"))
+        last_present = isinstance(fields.get("last_name"), dict) and bool(fields["last_name"].get("value"))
+
+        if first_present and last_present:
+            return fields
+
+        name_field = fields.get("name")
+        if not (isinstance(name_field, dict) and name_field.get("value")):
+            return fields
+
+        full_name = str(name_field.get("value", "")).strip()
+        if not full_name:
+            return fields
+
+        parts = [p for p in full_name.split() if p]
+        if len(parts) == 1:
+            first_val, last_val = parts[0], ""
+        else:
+            first_val, last_val = parts[0], " ".join(parts[1:])
+
+        # Base template copying useful flags from the name field
+        def clone_from_name(value: str) -> Dict[str, Any]:
+            return {
+                "value": value,
+                "original_value": name_field.get("original_value", value),
+                "source": name_field.get("source", "name_split"),
+                "confidence": name_field.get("confidence", 0.8),
+                "enabled": name_field.get("enabled", True),
+                "required": name_field.get("required", False),
+                # Keep review flags conservative; user can edit
+                "reviewed": name_field.get("reviewed", False),
+                "requires_human_review": name_field.get("requires_human_review", False),
+            }
+
+        if not first_present:
+            fields["first_name"] = clone_from_name(first_val)
+        if not last_present:
+            fields["last_name"] = clone_from_name(last_val)
+    except Exception as _:
+        # Best-effort; never fail pipeline on name split
+        pass
+    return fields
+
 def detect_field_value_discrepancies(before_fields: dict, after_fields: dict, step_name: str) -> None:
     """
     Helper function to detect and log field value discrepancies between processing steps
@@ -464,10 +517,11 @@ def process_job_v2(job: Dict[str, Any]) -> None:
                 }
         log_worker_debug("DocAI field values summary", docai_field_values)
         
-        # Step 4: Split address fields
+        # Step 4: Split address fields and ensure name parts
         log_worker_debug("=== STEP 4: SPLIT ADDRESS FIELDS ===")
         pre_split_fields = docai_fields.copy()
         docai_fields = split_combined_address_fields(docai_fields, school_id)
+        docai_fields = ensure_name_components(docai_fields)
         detect_field_value_discrepancies(pre_split_fields, docai_fields, "Address Splitting")
         log_worker_debug("Fields After Address Splitting", docai_fields, verbose=True)
         log_worker_debug("Field names after address splitting", list(docai_fields.keys()))
