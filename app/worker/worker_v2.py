@@ -588,12 +588,9 @@ def process_job_v2(job: Dict[str, Any]) -> None:
             
             # Handle validation results based on actual Google Maps API response
             if validation_state == "verified":
-                # Perfect match - set google_maps_verified source
-                for field_name in ['address', 'city', 'state', 'zip_code']:
-                    if field_name in validated_fields:
-                        validated_fields[field_name]['source'] = 'google_maps_verified'
-                
-                log_worker_debug("Address VERIFIED by Google Maps - set google_maps_verified source")
+                # Address validation service already set source to 'google_maps_verified'
+                # and requires_human_review to False - no additional changes needed
+                log_worker_debug("Address VERIFIED by Google Maps - validation service applied all changes")
                 
             elif validation_state == "can_be_verified":
                 log_worker_debug("Address CAN_BE_VERIFIED - Google Maps has suggestions, keeping original sources")

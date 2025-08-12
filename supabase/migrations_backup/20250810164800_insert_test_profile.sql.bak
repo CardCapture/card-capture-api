@@ -1,0 +1,27 @@
+-- Insert test user profile for local development
+-- This allows RLS policies to work properly
+INSERT INTO public.profiles (
+    id,
+    email,
+    first_name,
+    last_name,
+    role,
+    school_id,
+    created_at,
+    updated_at
+) VALUES (
+    'f8714b88-f5c7-404c-b4fa-2304e014a44b',
+    'test@example.com',
+    'Test',
+    'User',
+    '{admin}',
+    'b1a2c3d4-e5f6-7890-1234-56789abcdef0',
+    NOW(),
+    NOW()
+) ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    first_name = EXCLUDED.first_name,
+    last_name = EXCLUDED.last_name,
+    role = EXCLUDED.role,
+    school_id = EXCLUDED.school_id,
+    updated_at = NOW();

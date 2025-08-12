@@ -101,7 +101,7 @@ def validate_address(
     
     # Try Google Maps validation
     try:
-        google_result = _validate_with_google_maps(address, city, state, zip_code)
+        google_result = _validate_with_google_maps(address, city, state, zip_code, original_query)
         
         if google_result:
             # First check if it's a complete address with house number
@@ -256,7 +256,7 @@ def _has_house_number(address: str) -> bool:
     return has_number
 
 
-def _validate_with_google_maps(address: str, city: str, state: str, zip_code: str) -> Optional[Dict[str, Any]]:
+def _validate_with_google_maps(address: str, city: str, state: str, zip_code: str, original_query: Dict[str, str] = None) -> Optional[Dict[str, Any]]:
     """Call Google Maps API for validation with smart query handling"""
     
     if not gmaps_client:
@@ -306,7 +306,7 @@ def _validate_with_google_maps(address: str, city: str, state: str, zip_code: st
             
             # Evaluate each result and pick the best one
             for result in geocode_results[:3]:  # Check top 3 results
-                confidence = _calculate_confidence_score(result)
+                confidence = _calculate_confidence_score(result, original_query)
                 
                 if confidence > best_confidence:
                     best_confidence = confidence
@@ -327,6 +327,9 @@ def _validate_with_google_maps(address: str, city: str, state: str, zip_code: st
     
     if not best_result:
         return None
+    
+    # Recalculate confidence for the best result to ensure proper capping
+    final_confidence = _calculate_confidence_score(best_result, original_query)
     
     # Process the best result
     formatted_address = best_result.get('formatted_address', '')
@@ -356,7 +359,7 @@ def _validate_with_google_maps(address: str, city: str, state: str, zip_code: st
     log_debug("Google Maps validation successful", {
         "formatted_address": formatted_address,
         "extracted_components": extracted,
-        "confidence_score": best_confidence,
+        "confidence_score": final_confidence,
         "location_type": geometry.get('location_type'),
         "partial_match": best_result.get('partial_match', False)
     }, service="address_validation")
@@ -366,7 +369,7 @@ def _validate_with_google_maps(address: str, city: str, state: str, zip_code: st
         "latitude": location.get('lat'),
         "longitude": location.get('lng'),
         "place_id": best_result.get('place_id'),
-        "confidence_score": best_confidence,
+        "confidence_score": final_confidence,
         "location_type": geometry.get('location_type'),
         "partial_match": best_result.get('partial_match', False),
         "result_types": best_result.get('types', []),
@@ -477,7 +480,7 @@ def _format_suggestion(google_result: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-def _calculate_confidence_score(google_result: Dict[str, Any]) -> int:
+def _calculate_confidence_score(google_result: Dict[str, Any], original_query: Dict[str, str] = None) -> int:
     """Calculate confidence score for a Google Maps result (0-100)"""
     score = 0
     
@@ -516,7 +519,58 @@ def _calculate_confidence_score(google_result: Dict[str, Any]) -> int:
     if 'street_address' in result_types or 'premise' in result_types:
         score += 10
     
-    return min(score, 100)  # Cap at 100
+    # Handle missing components that Google Maps filled in
+    if original_query:
+        missing_components_filled = 0
+        
+        # Extract components from Google result to check what was filled
+        components = google_result.get('address_components', [])
+        google_city = ""
+        google_state = ""
+        
+        for component in components:
+            types = component.get('types', [])
+            if 'locality' in types:
+                google_city = component.get('long_name', '')
+            elif 'administrative_area_level_1' in types:
+                google_state = component.get('short_name', '')
+        
+        # Check if Google filled in missing city
+        if (not original_query.get("city", "").strip() and google_city.strip()):
+            missing_components_filled += 1
+            
+        # Check if Google filled in missing state  
+        if (not original_query.get("state", "").strip() and google_state.strip()):
+            missing_components_filled += 1
+            
+        # Check if Google filled in missing zip code
+        google_zip = ""
+        for component in components:
+            if 'postal_code' in component.get('types', []):
+                google_zip = component.get('long_name', '')
+                break
+        
+        if (not original_query.get("zip_code", "").strip() and google_zip.strip()):
+            missing_components_filled += 1
+        
+        # Special handling for addresses where Google filled in missing components
+        if missing_components_filled > 0:
+            log_debug(f"Google Maps filled {missing_components_filled} missing components - targeting 'can_be_verified' range", service="address_validation")
+            
+            # For addresses with missing components that Google filled in,
+            # we want "can_be_verified" (60-79) not "verified" (80+)
+            # This ensures user sees validation UI to accept the completion
+            if score >= 80:
+                # Cap high-confidence results at 75 when components were filled
+                # This forces "can_be_verified" behavior for better UX
+                score = 75
+                log_debug(f"Capped confidence at 75 to ensure 'can_be_verified' UI for component completion", service="address_validation")
+            elif score < 60:
+                # Boost low confidence to at least 60 if Google could fill components
+                score = 60
+                log_debug(f"Boosted confidence to 60 to enable validation UI", service="address_validation")
+    
+    return min(score, 100)  # Final cap at 100
 
 
 def _get_friendly_error_message(error: str) -> str:

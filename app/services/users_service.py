@@ -8,7 +8,7 @@ from app.repositories.users_repository import (
     delete_user_db,
     parse_pg_array
 )
-from app.core.clients import supabase_client, supabase_auth
+from app.core.clients import get_supabase_client, get_supabase_auth
 from app.utils.retry_utils import log_debug
 import traceback
 
@@ -18,7 +18,8 @@ async def get_user_profile(user_id: str):
     """
     try:
         log_debug(f"Fetching user profile for user_id: {user_id}", service="users")
-        result = supabase_client.table("users").select("*").eq("id", user_id).execute()
+        supabase = get_supabase_client()
+        result = supabase.table("users").select("*").eq("id", user_id).execute()
         log_debug(f"User profile fetched for user_id: {user_id}", service="users")
         return result.data[0] if result.data else None
     except Exception as e:
@@ -34,7 +35,8 @@ async def get_users(user):
         
         # Use the user_profiles_with_login view which now includes school_id
         # This gives us both last_sign_in_at from users table and school_id from profiles table
-        result = supabase_client.table("user_profiles_with_login").select("id, email, first_name, last_name, role, school_id, last_sign_in_at").eq("school_id", user_school_id).execute()
+        supabase = get_supabase_client()
+        result = supabase.table("user_profiles_with_login").select("id, email, first_name, last_name, role, school_id, last_sign_in_at").eq("school_id", user_school_id).execute()
         
         users = result.data or []
         # Handle role parsing (same as existing logic)
@@ -175,7 +177,8 @@ async def update_user_service(user_id: str, payload):
         log_debug(f"Updating user {user_id} with data: {update_data}", service="users")
         
         # Update the profiles table (not users table)
-        result = supabase_client.table("profiles").update(update_data).eq("id", user_id).execute()
+        supabase = get_supabase_client()
+        result = supabase.table("profiles").update(update_data).eq("id", user_id).execute()
         
         if hasattr(result, 'error') and result.error:
             log_debug(f"Error updating user {user_id}: {result.error}", service="users")
@@ -211,7 +214,7 @@ async def delete_user_service(user_id: str, user):
         
         log_debug(f"Attempting to delete user: {user_id}", service="users")
         # Use the proper delete_user_db function which handles profiles cleanup first
-        result = delete_user_db(supabase_auth, supabase_client, user_id)
+        result = delete_user_db(get_supabase_auth(), get_supabase_client(), user_id)
         log_debug(f"Successfully deleted user: {user_id}", service="users")
         return {"success": True}
         

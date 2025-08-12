@@ -41,6 +41,15 @@ def determine_review_status(fields: Dict[str, Any]) -> Tuple[str, List[str]]:
                 "reason": field_data.get("review_notes", "No reason provided")
             }, service="review")
             continue
+        
+        # Skip confidence-based review for Google Maps verified fields
+        # These have already been validated with high confidence by Google Maps
+        field_source = field_data.get("source", "")
+        if field_source in ["google_maps_verified", "google_maps_suggested"] and field_name in ["address", "city", "state", "zip_code"]:
+            log_debug(f"Field {field_name} verified by Google Maps - skipping confidence check", {
+                "source": field_source
+            }, service="review")
+            continue
             
         # Check required field rules
         field_value = field_data.get("value", "")
