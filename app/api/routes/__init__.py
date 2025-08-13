@@ -13,6 +13,7 @@ from .demo import router as demo_router
 from .crm_events import router as crm_events_router
 from .students import router as students_router
 from .registration import router as registration_router
+from .qr import router as qr_router
 
 __all__ = [
     'cards_router',
@@ -28,4 +29,5 @@ __all__ = [
     'crm_events_router',
     'students_router',
     'registration_router',
+    'qr_router',
 ] 

@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from fastapi import HTTPException
 from app.core.clients import get_supabase_client
-from app.repositories.students_repository import get_student_by_email, upsert_student
+from app.repositories.students_repository import get_student_by_email, upsert_student, create_token_for_student
 from app.repositories.auth_repository import create_magic_link_db, validate_magic_link_db, consume_magic_link_db
 from app.utils.retry_utils import log_debug
 from app.utils.qr_utils import qr_png_data_uri
@@ -219,8 +219,16 @@ class RegistrationService:
         # Upsert student
         student = upsert_student(student_data)
         
-        # Send verification email if not verified (event code path)
-        if not verified:
+        # Generate QR code token for the student
+        token = create_token_for_student(student["id"])
+        qr_data_uri = qr_png_data_uri(token)
+        
+        # Send confirmation email with QR code
+        if verified:
+            # Send welcome email with QR code for verified users
+            await self._send_confirmation_email_with_qr(student["email"], student["id"], token, qr_data_uri)
+        else:
+            # Send verification email for unverified users (event code path)
             await self._send_verification_email(student["email"], student["id"])
         
         # Log metrics
@@ -237,6 +245,8 @@ class RegistrationService:
             "success": True,
             "student_id": student["id"],
             "verified": verified,
+            "token": token,
+            "qrDataUri": qr_data_uri,
             "message": "Registration successful!" if verified else "Registration successful! Check your email to verify your address."
         }
     
@@ -380,6 +390,78 @@ class RegistrationService:
         except Exception as e:
             log_debug(f"Failed to send registration email: {str(e)}", service="registration")
             log_debug(f"📧 Manual registration link: {magic_url}", service="registration")
+    
+    async def _send_confirmation_email_with_qr(self, email: str, student_id: str, token: str, qr_data_uri: str):
+        """Send confirmation email with QR code"""
+        if not self.resend_api_key:
+            return
+        
+        manage_url = f"{self.frontend_url}/student-manage?token={token}"
+        
+        try:
+            # Convert data URI to actual image bytes for attachment
+            import base64
+            import qrcode
+            from io import BytesIO
+            
+            # Generate QR code as bytes
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=2,
+            )
+            qr.add_data(token)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            
+            # Convert to bytes
+            buffer = BytesIO()
+            img.save(buffer, format="PNG")
+            qr_bytes = buffer.getvalue()
+            qr_base64 = base64.b64encode(qr_bytes).decode()
+            
+            params = {
+                "from": "CardCapture <no-reply@cardcapture.io>",
+                "to": [email],
+                "subject": "Welcome to CardCapture - Your QR Code",
+                "html": f"""
+                <h2>Registration Complete!</h2>
+                <p>Welcome to CardCapture! Your registration is complete and your information is ready to share at college fairs.</p>
+                
+                <h3>Your Personal QR Code</h3>
+                <p>Show this QR code at any college booth using CardCapture to instantly share your information:</p>
+                <p style="text-align: center;">
+                    <img src="cid:qrcode" alt="Your QR Code" style="width: 250px; height: 250px; border: 2px solid #e5e7eb; border-radius: 8px; padding: 10px;" />
+                </p>
+                
+                <p style="text-align: center; margin-top: 10px;">
+                    <span style="font-family: monospace; background-color: #f3f4f6; padding: 8px 12px; border-radius: 4px; font-size: 12px;">{token}</span>
+                </p>
+                
+                <h3>Manage Your Information</h3>
+                <p>You can update your information at any time using this link:</p>
+                <p><a href="{manage_url}" style="display: inline-block; padding: 12px 24px; background-color: #3B82F6; color: white; text-decoration: none; border-radius: 6px;">Manage My Profile</a></p>
+                
+                <p style="margin-top: 30px; font-size: 12px; color: #6b7280;">
+                    Save this email for future reference. You'll need your QR code or the link above to access and update your information.
+                </p>
+                """,
+                "attachments": [
+                    {
+                        "filename": "cardcapture-qr.png",
+                        "content": qr_base64,
+                        "content_id": "qrcode"
+                    }
+                ]
+            }
+            
+            resend.Emails.send(params)
+            log_debug(f"Confirmation email with QR sent to {email}", service="registration")
+            
+        except Exception as e:
+            log_debug(f"Failed to send confirmation email: {str(e)}", service="registration")
+            log_debug(f"📧 Manual manage link: {manage_url}", service="registration")
     
     async def _send_verification_email(self, email: str, student_id: str):
         """Send email verification link"""
