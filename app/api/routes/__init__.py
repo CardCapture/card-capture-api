@@ -14,6 +14,8 @@ from .crm_events import router as crm_events_router
 from .students import router as students_router
 from .registration import router as registration_router
 from .qr import router as qr_router
+from .high_schools import router as high_schools_router
+from .majors import router as majors_router
 
 __all__ = [
     'cards_router',
@@ -30,4 +32,6 @@ __all__ = [
     'students_router',
     'registration_router',
     'qr_router',
+    'high_schools_router',
+    'majors_router',
 ] 
