@@ -17,7 +17,7 @@ async def search_high_schools(
     Returns a list of schools matching the search query.
     """
     try:
-        results = await high_schools_repo.search_schools(
+        results = high_schools_repo.search_schools(
             query=q,
             limit=limit,
             state=state
@@ -36,7 +36,7 @@ async def search_high_schools(
 async def get_school(school_id: str) -> Dict[str, Any]:
     """Get a specific school by ID"""
     try:
-        school = await high_schools_repo.get_school_by_id(school_id)
+        school = high_schools_repo.get_school_by_id(school_id)
         
         if not school:
             raise HTTPException(status_code=404, detail="School not found")
@@ -59,7 +59,7 @@ async def get_schools_by_state(
         if len(state) != 2:
             raise HTTPException(status_code=400, detail="State must be a 2-letter code")
         
-        schools = await high_schools_repo.get_schools_by_state(
+        schools = high_schools_repo.get_schools_by_state(
             state=state.upper(),
             limit=limit
         )
@@ -79,7 +79,7 @@ async def get_schools_by_state(
 async def get_school_stats() -> Dict[str, Any]:
     """Get high school directory statistics"""
     try:
-        total_count = await high_schools_repo.get_school_count()
+        total_count = high_schools_repo.get_school_count()
         
         return {
             "total_schools": total_count,

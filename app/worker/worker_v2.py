@@ -24,6 +24,7 @@ from app.services.settings_service import get_field_requirements, apply_field_re
 from app.services.review_service import determine_review_status, validate_field_data
 from app.services.address_validation_service import validate_address_for_pipeline
 from app.services.gemini_service import process_card_with_gemini_v2
+from app.services.high_school_matching_service import HighSchoolMatchingService
 
 # Import existing infrastructure
 from app.repositories.processing_jobs_repository import update_processing_job
@@ -659,10 +660,27 @@ def process_job_v2(job: Dict[str, Any]) -> None:
                 "will_set_google_maps_verified": validation_state == "verified"
             })
             log_worker_debug("Fields After Address Validation", validated_fields, verbose=True)
+            
+            # Step 9b: High School Validation and CEEB Code Matching
+            log_worker_debug("=== STEP 9b: HIGH SCHOOL VALIDATION ===")
+            try:
+                high_school_service = HighSchoolMatchingService()
+                validated_fields = high_school_service.validate_and_enhance_high_school(
+                    validated_fields,
+                    confidence_threshold=0.85
+                )
+                log_worker_debug("High School validation completed", {
+                    "high_school": validated_fields.get('high_school', {}).get('value'),
+                    "ceeb_code": validated_fields.get('ceeb_code', {}).get('value'),
+                    "source": validated_fields.get('high_school', {}).get('source')
+                })
+            except Exception as e:
+                log_worker_debug(f"High school validation failed: {str(e)}", level="warning")
+                # Continue without high school validation if it fails
         else:
-            # Skip address validation if AI failed
+            # Skip address and high school validation if AI failed
             validated_fields = gemini_fields
-            log_worker_debug("Skipping address validation due to AI failure")
+            log_worker_debug("Skipping address and high school validation due to AI failure")
         
         # Step 10: Final validation and review determination
         log_worker_debug("=== STEP 10: FINAL VALIDATION ===")
@@ -980,6 +998,21 @@ async def retry_ai_processing(document_id: str):
             
             log_worker_debug(f"Retry address validation result: {validation_state}")
             log_worker_debug("Retry address validation complete", verbose=True)
+            
+            # Apply high school validation to retry results
+            log_worker_debug("Applying high school validation to retry results...")
+            try:
+                high_school_service = HighSchoolMatchingService()
+                validated_fields = high_school_service.validate_and_enhance_high_school(
+                    validated_fields,
+                    confidence_threshold=0.85
+                )
+                log_worker_debug("Retry: High school validation completed", {
+                    "high_school": validated_fields.get('high_school', {}).get('value'),
+                    "ceeb_code": validated_fields.get('ceeb_code', {}).get('value')
+                })
+            except Exception as e:
+                log_worker_debug(f"Retry: High school validation failed: {str(e)}", level="warning")
             
             # Determine new review status with address-validated data
             final_fields = validate_field_data(validated_fields)

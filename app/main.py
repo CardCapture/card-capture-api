@@ -32,7 +32,7 @@ app.include_router(crm_events_router)
 app.include_router(students_router)
 app.include_router(registration_router)
 app.include_router(qr_router)
-app.include_router(high_schools_router, prefix="/high-schools")
+app.include_router(high_schools_router, prefix="/high_schools")
 app.include_router(majors_router, prefix="/majors")
 
 @app.get("/")
