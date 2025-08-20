@@ -6,8 +6,8 @@ class HighSchoolsRepository:
         self.client = get_supabase_client()
         self.table = "high_schools_directory"
     
-    def search_schools(self, query: str, limit: int = 10, state: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Search high schools by name with optional state filter using fuzzy matching"""
+    def search_schools(self, query: str, limit: int = 10, state: Optional[str] = None, city: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Search high schools by name with optional state/city filter using fuzzy matching"""
         try:
             results = []
             
@@ -22,14 +22,43 @@ class HighSchoolsRepository:
                 
                 return qb
             
-            # Strategy 1: Direct substring match
-            try:
-                query_builder = build_base_query()
-                direct_results = query_builder.ilike("name", f"%{query}%").execute()
-                results.extend(direct_results.data or [])
-            except Exception as e:
-                print(f"Strategy 1 failed: {e}")
-                pass
+            def build_city_query():
+                """Build query with city filter for location-first search"""
+                qb = self.client.table(self.table).select(
+                    "id, name, city, state, phone, website, district_name, school_type, level, ceeb_code, source"
+                ).limit(limit)
+                
+                if state:
+                    qb = qb.eq("state", state.upper())
+                if city:
+                    qb = qb.ilike("city", f"%{city}%")
+                
+                return qb
+            
+            # Strategy 0: LOCATION-FIRST - If we have city info, search locally first
+            if city:
+                try:
+                    city_query_builder = build_city_query()
+                    local_results = city_query_builder.ilike("name", f"%{query}%").execute()
+                    if local_results.data:
+                        results.extend(local_results.data)
+                        print(f"Found {len(local_results.data)} local matches in {city}")
+                except Exception as e:
+                    print(f"City-first search failed: {e}")
+                    pass
+            
+            # Strategy 1: Direct substring match (skip if we already have good local results)
+            if len(results) < limit:
+                try:
+                    query_builder = build_base_query()
+                    direct_results = query_builder.ilike("name", f"%{query}%").execute()
+                    # Add results that aren't already in our list
+                    for result in (direct_results.data or []):
+                        if not any(existing['id'] == result['id'] for existing in results):
+                            results.append(result)
+                except Exception as e:
+                    print(f"Strategy 1 failed: {e}")
+                    pass
             
             # Strategy 2: Search for individual words if query contains multiple words (but limit results)
             if len(query.split()) > 1 and len(results) < limit:

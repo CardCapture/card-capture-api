@@ -24,7 +24,7 @@ from app.services.settings_service import get_field_requirements, apply_field_re
 from app.services.review_service import determine_review_status, validate_field_data
 from app.services.address_validation_service import validate_address_for_pipeline
 from app.services.gemini_service import process_card_with_gemini_v2
-from app.services.high_school_matching_service import HighSchoolMatchingService
+from app.services.enhanced_high_school_matching_service import EnhancedHighSchoolMatchingService
 
 # Import existing infrastructure
 from app.repositories.processing_jobs_repository import update_processing_job
@@ -182,7 +182,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
             value = field['value'].replace('\n', ' ').replace('\r', ' ').strip()
             
             # Pattern 1: City, State, Zip (with optional trailing punctuation)
-            match = re.match(r'^([^,]+),\s*([A-Z]{2})(?:,\s*|\s+)(\d{5}(?:-\d{4})?)[.,;:]*?$', value)
+            match = re.match(r'^([^,]+),\s*([A-Za-z]{2})(?:,\s*|\s+)(\d{5}(?:-\d{4})?)[.,;:]*?$', value)
             if match:
                 fields['city'] = {
                     'value': match.group(1).strip(),
@@ -192,7 +192,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
                     'required': False
                 }
                 fields['state'] = {
-                    'value': match.group(2).strip(),
+                    'value': match.group(2).strip().upper(),
                     'confidence': field.get('confidence', 0.8),
                     'source': 'address_splitting',
                     'enabled': True,
@@ -210,7 +210,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
                 continue
 
             # Pattern 2: City, State (no zip, with optional trailing punctuation)
-            match = re.match(r'^([^,]+),\s*([A-Z]{2})[.,;:]*?$', value)
+            match = re.match(r'^([^,]+),\s*([A-Za-z]{2})[.,;:]*?$', value)
             if match:
                 fields['city'] = {
                     'value': match.group(1).strip(),
@@ -220,7 +220,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
                     'required': False
                 }
                 fields['state'] = {
-                    'value': match.group(2).strip(),
+                    'value': match.group(2).strip().upper(),
                     'confidence': field.get('confidence', 0.8),
                     'source': 'address_splitting',
                     'enabled': True,
@@ -231,7 +231,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
                 continue
 
             # Pattern 3: City State Zip (no commas, with optional trailing punctuation)
-            match = re.match(r'^([^,]+)\s+([A-Z]{2})\s+(\d{5}(?:-\d{4})?)[.,;:]*?$', value)
+            match = re.match(r'^([^,]+)\s+([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)[.,;:]*?$', value)
             if match:
                 fields['city'] = {
                     'value': match.group(1).strip(),
@@ -241,7 +241,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
                     'required': False
                 }
                 fields['state'] = {
-                    'value': match.group(2).strip(),
+                    'value': match.group(2).strip().upper(),
                     'confidence': field.get('confidence', 0.8),
                     'source': 'address_splitting',
                     'enabled': True,
@@ -259,7 +259,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
                 continue
 
             # Pattern 4: City State (no commas, no zip, with optional trailing punctuation)
-            match = re.match(r'^([^,]+)\s+([A-Z]{2})[.,;:]*?$', value)
+            match = re.match(r'^([^,]+)\s+([A-Za-z]{2})[.,;:]*?$', value)
             if match:
                 fields['city'] = {
                     'value': match.group(1).strip(),
@@ -269,7 +269,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
                     'required': False
                 }
                 fields['state'] = {
-                    'value': match.group(2).strip(),
+                    'value': match.group(2).strip().upper(),
                     'confidence': field.get('confidence', 0.8),
                     'source': 'address_splitting',
                     'enabled': True,
@@ -287,7 +287,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
                 for i in range(len(parts) - 1):
                     # Remove punctuation from the potential state part for matching
                     state_part = parts[i + 1].rstrip('.,;:')
-                    if re.match(r'^[A-Z]{2}$', state_part):
+                    if re.match(r'^[A-Za-z]{2}$', state_part):
                         city = ' '.join(parts[:i + 1])
                         state = state_part
                         fields['city'] = {
@@ -298,7 +298,7 @@ def split_combined_address_fields(fields: dict, school_id: str = None) -> dict:
                             'required': False
                         }
                         fields['state'] = {
-                            'value': state.strip(),
+                            'value': state.strip().upper(),
                             'confidence': field.get('confidence', 0.6),
                             'source': 'address_splitting_fallback',
                             'enabled': True,
@@ -518,11 +518,10 @@ def process_job_v2(job: Dict[str, Any]) -> None:
                 }
         log_worker_debug("DocAI field values summary", docai_field_values)
         
-        # Step 4: Split address fields and ensure name parts
+        # Step 4: Split address fields (name splitting moved to after Gemini)
         log_worker_debug("=== STEP 4: SPLIT ADDRESS FIELDS ===")
         pre_split_fields = docai_fields.copy()
         docai_fields = split_combined_address_fields(docai_fields, school_id)
-        docai_fields = ensure_name_components(docai_fields)
         detect_field_value_discrepancies(pre_split_fields, docai_fields, "Address Splitting")
         log_worker_debug("Fields After Address Splitting", docai_fields, verbose=True)
         log_worker_debug("Field names after address splitting", list(docai_fields.keys()))
@@ -620,6 +619,18 @@ def process_job_v2(job: Dict[str, Any]) -> None:
                 log_worker_debug(f"Warning: Failed to sync field types: {str(sync_error)}")
                 # Don't fail the whole job for this, just log and continue
             
+            # Step 8.2: Ensure name components (moved here after Gemini processing)
+            log_worker_debug("=== STEP 8.2: ENSURE NAME COMPONENTS ===")
+            pre_name_split_fields = gemini_fields.copy()
+            gemini_fields = ensure_name_components(gemini_fields)
+            detect_field_value_discrepancies(pre_name_split_fields, gemini_fields, "Name Splitting")
+            log_worker_debug("Fields After Name Splitting", {
+                field: gemini_fields.get(field, {}).get('value', '') 
+                for field in ['name', 'first_name', 'last_name'] 
+                if field in gemini_fields
+            })
+            log_worker_debug("Field names after name splitting", list(gemini_fields.keys()))
+            
         except Exception as gemini_error:
             log_worker_debug(f"⚠️ Gemini processing failed: {str(gemini_error)}")
             log_worker_debug("Full Gemini error traceback:", traceback.format_exc())
@@ -628,6 +639,17 @@ def process_job_v2(job: Dict[str, Any]) -> None:
             gemini_fields = prepare_docai_for_review(docai_fields)
             ai_processing_failed = True
             ai_error_message = str(gemini_error)
+            
+            # Still ensure name components even if Gemini failed
+            log_worker_debug("=== FALLBACK: ENSURE NAME COMPONENTS ===")
+            pre_name_split_fields = gemini_fields.copy()
+            gemini_fields = ensure_name_components(gemini_fields)
+            detect_field_value_discrepancies(pre_name_split_fields, gemini_fields, "Name Splitting (Fallback)")
+            log_worker_debug("Fields After Name Splitting (Fallback)", {
+                field: gemini_fields.get(field, {}).get('value', '') 
+                for field in ['name', 'first_name', 'last_name'] 
+                if field in gemini_fields
+            })
             
             log_worker_debug("Using DocAI fallback data", gemini_fields, verbose=True)
         
@@ -662,17 +684,31 @@ def process_job_v2(job: Dict[str, Any]) -> None:
             log_worker_debug("Fields After Address Validation", validated_fields, verbose=True)
             
             # Step 9b: High School Validation and CEEB Code Matching
-            log_worker_debug("=== STEP 9b: HIGH SCHOOL VALIDATION ===")
+            log_worker_debug("=== STEP 9b: ENHANCED HIGH SCHOOL VALIDATION ===")
+            log_worker_debug("🚨 CLAUDE DEBUG: STEP 9B IS EXECUTING - EnhancedHighSchoolMatchingService should run now!")
+            
+            # DEBUG: Log fields passed to high school service
+            city_field = validated_fields.get('city', {})
+            state_field = validated_fields.get('state', {})
+            log_worker_debug(f"🔍 CLAUDE DEBUG: City field passed to Step 9b: {city_field}")
+            log_worker_debug(f"🔍 CLAUDE DEBUG: State field passed to Step 9b: {state_field}")
+            log_worker_debug(f"🔍 CLAUDE DEBUG: All field names in Step 9b: {list(validated_fields.keys())}")
+            
             try:
-                high_school_service = HighSchoolMatchingService()
+                high_school_service = EnhancedHighSchoolMatchingService()
                 validated_fields = high_school_service.validate_and_enhance_high_school(
                     validated_fields,
-                    confidence_threshold=0.85
+                    confidence_threshold=0.85  # Using reliable 85% threshold
                 )
-                log_worker_debug("High School validation completed", {
+                validation_status = validated_fields.get('high_school_validation', {})
+                log_worker_debug("Enhanced High School validation completed", {
                     "high_school": validated_fields.get('high_school', {}).get('value'),
                     "ceeb_code": validated_fields.get('ceeb_code', {}).get('value'),
-                    "source": validated_fields.get('high_school', {}).get('source')
+                    "source": validated_fields.get('high_school', {}).get('source'),
+                    "validation_status": validation_status.get('status'),
+                    "match_type": validation_status.get('match_type'),
+                    "confidence": f"{validation_status.get('confidence', 0):.1%}",
+                    "suggestions_count": len(validation_status.get('suggestions', []))
                 })
             except Exception as e:
                 log_worker_debug(f"High school validation failed: {str(e)}", level="warning")
@@ -1002,7 +1038,7 @@ async def retry_ai_processing(document_id: str):
             # Apply high school validation to retry results
             log_worker_debug("Applying high school validation to retry results...")
             try:
-                high_school_service = HighSchoolMatchingService()
+                high_school_service = EnhancedHighSchoolMatchingService()
                 validated_fields = high_school_service.validate_and_enhance_high_school(
                     validated_fields,
                     confidence_threshold=0.85
