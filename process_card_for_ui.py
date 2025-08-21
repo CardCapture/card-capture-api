@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""
+Process a card through Pipeline V3 and save to database for UI viewing
+"""
+
+import os
+import sys
+import json
+import tempfile
+import shutil
+from datetime import datetime, timezone
+import uuid
+
+# Add the app directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Set up environment for testing
+os.environ['SUPABASE_URL'] = 'https://ftlweumoajawitlszpqx.supabase.co'
+os.environ['SUPABASE_KEY'] = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ0bHdldW1vYWphd2l0bHN6cHF4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MzI2NzE2MiwiZXhwIjoyMDU4ODQzMTYyfQ.SEsM-nY72fr_36jAN4Tjj_YL_8T0qOtCyKmV7kxQey8'
+os.environ['SUPABASE_SERVICE_ROLE_KEY'] = os.environ['SUPABASE_KEY']
+
+from app.pipeline.pipeline import CardProcessingPipeline
+from app.core.clients import get_supabase_client
+from app.repositories.processing_jobs_repository import insert_processing_job, update_processing_job
+
+def process_card_for_ui():
+    """Process a card through Pipeline V3 and save to database for UI viewing"""
+    print("🚀 Processing Card Through Pipeline V3 for UI")
+    print("=" * 60)
+    
+    # Select a test card
+    test_image = "test_images/page_1.png"  # You can change this to any test image
+    
+    if not os.path.exists(test_image):
+        print(f"❌ Test image not found: {test_image}")
+        return None
+    
+    print(f"📸 Using test image: {test_image}")
+    
+    # Generate test parameters
+    school_id = "b1a2c3d4-e5f6-7890-1234-56789abcdef0"  # Your test school
+    user_id = str(uuid.uuid4())  # Generate proper UUID
+    event_id = None
+    
+    print(f"🎯 Processing with:")
+    print(f"   School ID: {school_id}")
+    print(f"   User ID: {user_id}")
+    print(f"   Event ID: {event_id}")
+    
+    # Create job in database
+    supabase_client = get_supabase_client()
+    now = datetime.now(timezone.utc).isoformat()
+    
+    # Upload test image to a temporary bucket path for testing
+    bucket_path = f"test-uploads/{user_id}/{os.path.basename(test_image)}"
+    
+    print(f"\n📋 Creating processing job in database...")
+    job_data = {
+        "file_url": bucket_path,
+        "user_id": user_id,
+        "school_id": school_id,
+        "event_id": event_id,
+        "status": "processing",
+        "created_at": now,
+        "updated_at": now
+    }
+    
+    job_response = insert_processing_job(supabase_client, job_data)
+    job = job_response.data[0]
+    job_id = job["id"]
+    
+    print(f"✅ Created job: {job_id}")
+    
+    # Process through Pipeline V3
+    print(f"\n🔄 Processing through Pipeline V3...")
+    pipeline = CardProcessingPipeline()
+    
+    try:
+        result = pipeline.process(
+            image_path=test_image,
+            school_id=school_id,
+            user_id=user_id,
+            event_id=event_id
+        )
+        
+        print(f"✅ Pipeline processing completed!")
+        print(f"   Fields extracted: {len(result.fields)}")
+        print(f"   Review status: {result.metadata.get('review_status', 'unknown')}")
+        
+        # Convert result to database format
+        fields_for_db = {}
+        for field_name, field_data in result.fields.items():
+            if field_data.value:  # Only save fields with values
+                fields_for_db[field_name] = {
+                    "value": field_data.value,
+                    "confidence_score": field_data.confidence,
+                    "requires_review": field_data.requires_human_review,
+                    "review_notes": field_data.review_notes or ""
+                }
+        
+        # Update job with results
+        print(f"\n💾 Saving results to database...")
+        update_data = {
+            "status": "completed",
+            "extracted_fields": fields_for_db,
+            "processing_metadata": {
+                "pipeline_version": "v3",
+                "review_status": result.metadata.get('review_status'),
+                "fields_needing_review": result.metadata.get('fields_needing_review', []),
+                "enhancer_results": result.metadata.get('enhancer_results', []),
+                "enhancement_stats": result.metadata.get('enhancement_stats', {})
+            },
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        update_processing_job(supabase_client, job_id, update_data)
+        
+        print(f"✅ Results saved to database!")
+        print(f"\n🎉 SUCCESS! Card processed through Pipeline V3")
+        print(f"\n📋 Job Details:")
+        print(f"   Job ID: {job_id}")
+        print(f"   User ID: {user_id}")
+        print(f"   School ID: {school_id}")
+        print(f"   Status: completed")
+        print(f"   Fields: {len(fields_for_db)}")
+        
+        # Show some key fields
+        print(f"\n📝 Sample Extracted Fields:")
+        key_fields = ['first_name', 'last_name', 'email', 'high_school', 'ceeb_code', 'address']
+        for field_name in key_fields:
+            if field_name in fields_for_db:
+                field_data = fields_for_db[field_name]
+                print(f"   {field_name}: '{field_data['value']}' (confidence: {field_data['confidence_score']:.2f})")
+        
+        print(f"\n🌐 You should now be able to view this card in your UI!")
+        print(f"   Look for job ID: {job_id}")
+        print(f"   Or user ID: {user_id}")
+        
+        return {
+            "job_id": job_id,
+            "user_id": user_id,
+            "school_id": school_id,
+            "status": "completed",
+            "pipeline_version": "v3",
+            "fields_count": len(fields_for_db)
+        }
+        
+    except Exception as e:
+        print(f"\n❌ Pipeline processing failed: {str(e)}")
+        
+        # Update job with error
+        update_processing_job(supabase_client, job_id, {
+            "status": "failed",
+            "error_message": str(e),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
+        
+        import traceback
+        traceback.print_exc()
+        return None
+
+if __name__ == "__main__":
+    result = process_card_for_ui()
+    
+    if result:
+        print(f"\n✨ Card successfully processed and saved to database!")
+        print(f"   Check your UI for job: {result['job_id']}")
+    else:
+        print(f"\n💥 Processing failed - check the logs above")
