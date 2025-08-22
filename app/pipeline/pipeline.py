@@ -11,6 +11,7 @@ from app.pipeline.models import (
     FieldData, EnhancerResult
 )
 from app.pipeline.enhancers.base import FieldEnhancer
+from app.pipeline.enhancers.canonical_field_mapper import CanonicalFieldMapperEnhancer
 from app.pipeline.enhancers.field_splitter import FieldSplitterEnhancer
 from app.pipeline.enhancers.address_validator import AddressValidationEnhancer
 from app.pipeline.enhancers.high_school_matcher import HighSchoolMatcherEnhancer
@@ -44,12 +45,14 @@ class CardProcessingPipeline:
         Initialize enhancers in the correct order.
         
         Order matters! Some enhancers depend on others:
-        1. Split combined fields first
-        2. Apply field requirements to know what's enabled/required
-        3. Clean data before validation
-        4. Validate addresses and schools
+        1. Map field names to canonical format first
+        2. Split combined fields into components
+        3. Apply field requirements to know what's enabled/required
+        4. Clean data before validation
+        5. Validate addresses and schools
         """
         return [
+            CanonicalFieldMapperEnhancer(),  # Map legacy field names to canonical format
             FieldSplitterEnhancer(),         # Split combined fields into components
             FieldRequirementsEnhancer(),     # Apply school settings for enabled/required
             DataCleanerEnhancer(),           # Clean and format data

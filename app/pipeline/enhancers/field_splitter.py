@@ -10,27 +10,27 @@ from app.utils.retry_utils import log_debug
 
 class FieldSplitterEnhancer(FieldEnhancer):
     """
-    Splits combined fields into their individual components.
+    Splits combined address fields into their individual components.
     
     Handles:
     - city_state_zip -> city, state, zip_code
-    - name -> first_name, last_name
+    - city_state -> city, state
     - Other combined address fields
+    
+    Note: Name splitting (name -> first_name, last_name) is now handled 
+    by CanonicalFieldMapperEnhancer.
     """
     
     def get_description(self) -> str:
-        return "Split combined address and name fields into components"
+        return "Split combined address fields into components"
     
     def enhance(self, fields: Dict[str, FieldData], context: PipelineContext) -> Dict[str, FieldData]:
-        """Split combined fields into individual components"""
+        """Split combined address fields into individual components"""
         # Make a copy to avoid modifying during iteration
         fields = dict(fields)
         
-        # Split address fields
+        # Split address fields only (name splitting now handled by CanonicalFieldMapperEnhancer)
         fields = self._split_address_fields(fields, context)
-        
-        # Split name fields
-        fields = self._split_name_fields(fields, context)
         
         return fields
     
