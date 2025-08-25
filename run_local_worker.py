@@ -23,7 +23,7 @@ def run_local_worker():
     print()
     
     # Import and run the worker app
-    from app.worker.worker_v2 import app
+    from app.worker.worker_unified import app
     
     # Run with auto-reload for development
     uvicorn.run(

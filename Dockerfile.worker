@@ -31,4 +31,4 @@ COPY . .
 EXPOSE 8080
 
 # Run the worker as a FastAPI app
-CMD uvicorn app.worker.worker_v2:app --host 0.0.0.0 --port $PORT 
+CMD uvicorn app.worker.worker_unified:app --host 0.0.0.0 --port $PORT 

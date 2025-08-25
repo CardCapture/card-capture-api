@@ -122,10 +122,46 @@ def apply_field_requirements(fields: Dict[str, Any], requirements: Dict[str, Dic
             field_data["required"] = False
             log_debug(f"Default settings for {field_name}", service="settings")
     
+    # Define canonical fields - these are the fields we prefer to use
+    canonical_fields = {
+        'first_name', 'last_name', 'preferred_first_name', 
+        'date_of_birth', 'email', 'cell', 'permission_to_text',
+        'address', 'city', 'state', 'zip_code',
+        'high_school', 'class_rank', 'students_in_class', 'gpa',
+        'student_type', 'entry_term', 'major', 'mapped_major'
+    }
+    
+    # Define legacy field mappings to their canonical equivalents
+    legacy_to_canonical = {
+        'name_of_high_school': 'high_school',
+        'name_of_high_school_college': 'high_school', 
+        'high_school_name': 'high_school',
+        'name_of_high_school_/_college': 'high_school',
+        'entry_term_year': 'entry_term',
+        'major_academic_program_of_interest': 'major',
+        'city_state': 'city',  # We split this into separate city/state
+        'city/state': 'city',  # We split this into separate city/state
+        'name': 'first_name'  # We split this into first_name/last_name
+    }
+
     # Add missing enabled fields (both required and optional)
+    # BUT prioritize canonical fields and only add legacy fields if they provide unique value
     for field_name, field_settings in requirements.items():
         if field_settings.get("enabled", True) and field_name not in fields:
             is_required = field_settings.get("required", False)
+            
+            # Check if this is a legacy field that maps to a canonical field
+            canonical_equivalent = legacy_to_canonical.get(field_name)
+            if canonical_equivalent and canonical_equivalent in fields:
+                # Skip adding this legacy field if its canonical equivalent exists
+                log_debug(f"Skipping legacy field {field_name} - canonical equivalent {canonical_equivalent} exists", service="settings")
+                continue
+            
+            # Also skip if this is a non-canonical field and we're not missing core functionality
+            if field_name not in canonical_fields and not is_required:
+                # Only add non-canonical fields if they're required or provide unique value
+                log_debug(f"Skipping non-canonical optional field: {field_name}", service="settings")
+                continue
             
             # Smart review logic for mapped_major: only flag for review if required (when missing)
             needs_review = is_required
