@@ -31,7 +31,7 @@ def process_card_for_ui():
     print("=" * 60)
     
     # Select a test card
-    test_image = "test_images/page_19.png"  # Connor Shore - complete data for testing
+    test_image = "test_images/page_19.png"  # Alina's card - testing high confidence Google Maps
     
     if not os.path.exists(test_image):
         print(f"❌ Test image not found: {test_image}")
@@ -99,6 +99,8 @@ def process_card_for_ui():
         print(f"✅ Pipeline processing completed!")
         print(f"   Fields extracted: {len(result.fields)}")
         print(f"   Review status: {result.metadata.get('review_status', 'unknown')}")
+        
+
         
         # Convert result to database format (same as worker_v3)
         fields_dict = {}

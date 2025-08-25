@@ -563,20 +563,26 @@ def _calculate_confidence_score(google_result: Dict[str, Any], original_query: D
         
         # Special handling for addresses where Google filled in missing components
         if missing_components_filled > 0:
-            log_debug(f"Google Maps filled {missing_components_filled} missing components - targeting 'can_be_verified' range", service="address_validation")
+            log_debug(f"Google Maps filled {missing_components_filled} missing components", service="address_validation")
             
-            # For addresses with missing components that Google filled in,
-            # we want "can_be_verified" (60-79) not "verified" (80+)
-            # This ensures user sees validation UI to accept the completion
-            if score >= 80:
-                # Cap high-confidence results at 75 when components were filled
-                # This forces "can_be_verified" behavior for better UX
-                score = 75
-                log_debug(f"Capped confidence at 75 to ensure 'can_be_verified' UI for component completion", service="address_validation")
-            elif score < 60:
-                # Boost low confidence to at least 60 if Google could fill components
-                score = 60
-                log_debug(f"Boosted confidence to 60 to enable validation UI", service="address_validation")
+            # Simplified logic: Trust Google Maps if it has high confidence
+            # If Google can find a precise location match, it's reliable regardless of what was missing
+            if (score >= 85 and  # High confidence match
+                location_type in ['ROOFTOP', 'RANGE_INTERPOLATED']):  # Precise location
+                
+                log_debug(f"Auto-verifying: Google Maps has high confidence (score: {score}, type: {location_type})", service="address_validation")
+                # Keep high score for auto-verification (80+ = verified)
+                
+            elif score >= 70:
+                # Medium confidence - still likely good but let user verify
+                log_debug(f"Medium confidence: allowing verification (score: {score})", service="address_validation")
+                if score >= 80:
+                    score = 75  # Cap at 75 to show "can_be_verified"
+                
+            else:
+                # Low confidence - boost slightly if Google could fill components
+                log_debug(f"Low confidence: boosting to enable validation UI (score: {score})", service="address_validation")
+                score = max(score, 60)  # Ensure at least 60 for validation UI
     
     return min(score, 100)  # Final cap at 100
 
