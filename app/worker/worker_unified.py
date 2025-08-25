@@ -10,13 +10,13 @@ from typing import Dict, Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import should_use_pipeline_v3, get_pipeline_config
+# Pipeline configuration no longer needed - V3 is now the standard
 from app.repositories.processing_jobs_repository import update_processing_job
 from app.core.clients import get_supabase_client
 from app.utils.retry_utils import log_debug
 
 # Import both pipeline processors
-from app.worker.worker_v2 import process_job_v2
+# V2 worker removed - V3 is now the standard pipeline
 from app.worker.worker_v3 import process_job_v3
 
 app = FastAPI(title="CardCapture Unified Worker API")
@@ -40,11 +40,8 @@ async def startup_event():
     print(f"🌐 Environment: PORT={os.environ.get('PORT', 'NOT_SET')}", flush=True)
     
     # Show pipeline configuration
-    config = get_pipeline_config()
     print(f"📊 Pipeline Configuration:", flush=True)
-    print(f"   Default Version: {config['default_version']}", flush=True)
-    print(f"   V3 Rollout: {config['v3_rollout_percentage']}%", flush=True)
-    print(f"   V3 Schools: {config['v3_enabled_school_count']} enabled", flush=True)
+    print(f"   Version: V3 (standard pipeline)", flush=True)
     
     try:
         from app.core.clients import get_supabase_client
@@ -61,7 +58,7 @@ def root():
     return {
         "message": "CardCapture Unified Worker API is running",
         "version": "unified",
-        "pipeline_config": get_pipeline_config()
+        "pipeline_version": "v3"
     }
 
 
@@ -72,7 +69,7 @@ def health_check():
         "status": "healthy", 
         "service": "card-capture-worker-unified",
         "version": "unified",
-        "pipeline_config": get_pipeline_config()
+        "pipeline_version": "v3"
     }
 
 
@@ -83,17 +80,15 @@ def readiness_check():
         from app.core.clients import get_supabase_client
         supabase_client = get_supabase_client()
         
-        config = get_pipeline_config()
-        
         return {
             "status": "ready", 
             "service": "card-capture-worker-unified",
             "version": "unified",
+            "pipeline_version": "v3",
             "dependencies": {
                 "supabase": "connected",
                 "storage_path": "/tmp writable"
-            },
-            "pipeline_config": config
+            }
         }
     except Exception as e:
         return {
@@ -106,20 +101,16 @@ def readiness_check():
 def determine_pipeline_version(job: Dict[str, Any]) -> str:
     """
     Determine which pipeline version to use for this job.
+    Always returns 'v3' - V3 is now the standard pipeline.
     
     Args:
         job: Job data containing school_id, user_id, etc.
         
     Returns:
-        Pipeline version ('v2' or 'v3')
+        Pipeline version (always 'v3')
     """
-    school_id = job.get("school_id")
-    user_id = job.get("user_id")
-    
-    if should_use_pipeline_v3(school_id=school_id, user_id=user_id):
-        return "v3"
-    else:
-        return "v2"
+    # V3 is now the standard - no more V2 fallback
+    return "v3"
 
 
 def process_job_unified(job: Dict[str, Any]) -> None:
@@ -150,22 +141,19 @@ def process_job_unified(job: Dict[str, Any]) -> None:
     })
     
     try:
-        if pipeline_version == "v3":
-            log_debug(f"Routing job {job_id} to Pipeline V3", service="worker_unified")
-            process_job_v3(job)
-        else:
-            log_debug(f"Routing job {job_id} to Pipeline V2", service="worker_unified")
-            process_job_v2(job)
+        # Process with V3 pipeline (now the standard)
+        log_debug(f"🚀 Processing job {job_id} with Pipeline V3", service="worker_unified")
+        process_job_v3(job)
             
-        log_debug(f"✅ Job {job_id} completed successfully with Pipeline {pipeline_version}", service="worker_unified")
+        log_debug(f"✅ Job {job_id} completed successfully with Pipeline V3", service="worker_unified")
         
     except Exception as e:
-        log_debug(f"❌ Job {job_id} failed with Pipeline {pipeline_version}: {str(e)}", service="worker_unified")
+        log_debug(f"❌ Job {job_id} failed with Pipeline V3: {str(e)}", service="worker_unified")
         
         # Update job with pipeline version info even on failure
         update_processing_job(supabase_client, job_id, {
             "status": "failed",
-            "error_message": f"Pipeline {pipeline_version}: {str(e)}",
+            "error_message": f"Pipeline V3: {str(e)}",
             "updated_at": now
         })
         
@@ -174,19 +162,7 @@ def process_job_unified(job: Dict[str, Any]) -> None:
 
 def _get_routing_reason(school_id: str, user_id: str, pipeline_version: str) -> str:
     """Get human-readable reason for pipeline routing decision"""
-    from app.config import PIPELINE_VERSION, PIPELINE_V3_ENABLED_SCHOOLS, PIPELINE_V3_ROLLOUT_PERCENTAGE
-    
-    if pipeline_version == "v3":
-        if school_id and school_id in PIPELINE_V3_ENABLED_SCHOOLS:
-            return f"School {school_id} explicitly enabled for V3"
-        elif PIPELINE_VERSION == "v3":
-            return "Global setting: PIPELINE_VERSION=v3"
-        elif PIPELINE_V3_ROLLOUT_PERCENTAGE > 0:
-            hash_input = school_id or user_id or "default"
-            hash_value = hash(hash_input) % 100
-            return f"Rollout percentage: {PIPELINE_V3_ROLLOUT_PERCENTAGE}% (hash={hash_value})"
-    
-    return "Default: using V2 pipeline"
+    return "V3 is now the standard pipeline"
 
 
 def main_unified():
@@ -234,7 +210,7 @@ def process_get_endpoint():
         "method": "POST", 
         "status": "healthy", 
         "version": "unified",
-        "pipeline_config": get_pipeline_config()
+        "pipeline_version": "v3"
     }
 
 
@@ -297,7 +273,10 @@ async def process_job_endpoint(request: Request):
 @app.get("/pipeline/config")
 def get_pipeline_configuration():
     """Get current pipeline configuration"""
-    return get_pipeline_config()
+    return {
+        "pipeline_version": "v3",
+        "description": "V3 is now the standard pipeline"
+    }
 
 
 @app.post("/pipeline/test")
@@ -308,15 +287,14 @@ async def test_pipeline_routing(request: Request):
         school_id = data.get("school_id")
         user_id = data.get("user_id")
         
-        pipeline_version = "v3" if should_use_pipeline_v3(school_id, user_id) else "v2"
+        pipeline_version = "v3"
         routing_reason = _get_routing_reason(school_id, user_id, pipeline_version)
         
         return {
             "school_id": school_id,
             "user_id": user_id,
             "pipeline_version": pipeline_version,
-            "routing_reason": routing_reason,
-            "config": get_pipeline_config()
+            "routing_reason": routing_reason
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

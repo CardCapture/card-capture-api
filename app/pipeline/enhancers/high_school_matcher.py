@@ -58,8 +58,8 @@ class HighSchoolMatcherEnhancer(FieldEnhancer):
         }, service="pipeline")
         
         try:
-            # Run the enhanced matching service
-            validated_fields = self.matcher.validate_and_enhance_high_school(
+            # Run the enhanced matching service with location context
+            validated_fields = self.matcher.validate_and_enhance_high_school_with_location(
                 self._convert_to_legacy_format(fields),
                 confidence_threshold=0.85
             )
@@ -158,6 +158,17 @@ class HighSchoolMatcherEnhancer(FieldEnhancer):
             if validation_status.get('suggestions'):
                 fields[high_school_field_with_data].suggestions = validation_status['suggestions']
         
+        # Create the high_school_validation field that the frontend expects
+        if validation_status:
+            fields['high_school_validation'] = FieldData(
+                value=status,
+                confidence=1.0,
+                source='high_school_matcher',
+                validation_status=status,
+                requires_human_review=False,
+                suggestions=validation_status.get('suggestions', [])
+            )
+        
         return fields
     
     def _apply_verified_high_school(self, fields: Dict[str, FieldData], 
@@ -171,10 +182,26 @@ class HighSchoolMatcherEnhancer(FieldEnhancer):
         if 'high_school' in validated_fields:
             hs_data = validated_fields['high_school']
             fields['high_school'].value = hs_data.get('value', fields['high_school'].value)
-            fields['high_school'].source = 'high_school_directory'
+            fields['high_school'].source = 'high_school_directory_verified'
             fields['high_school'].confidence = validation_status.get('confidence', 0.9)
             fields['high_school'].requires_human_review = False
             fields['high_school'].review_notes = ""
+            
+            # Add metadata that frontend expects for verified schools
+            if not hasattr(fields['high_school'], 'metadata'):
+                fields['high_school'].metadata = {}
+            
+            # Extract school info from the enhanced high school service data
+            hs_metadata = hs_data.get('metadata', {})
+            
+            if hs_metadata:
+                # Use metadata from the enhanced service directly
+                fields['high_school'].metadata.update(hs_metadata)
+            else:
+                # Fallback for backward compatibility
+                fields['high_school'].metadata.update({
+                    'original_value': fields['high_school'].value
+                })
         
         # Add CEEB code if provided
         if 'ceeb_code' in validated_fields:

@@ -130,6 +130,12 @@ def process_job_v3(job: Dict[str, Any]) -> None:
     school_id = job["school_id"]
     event_id = job.get("event_id")
     
+    log_debug("🔍🔍🔍 CRITICAL: PROCESS_JOB_V3 CALLED 🔍🔍🔍", {
+        "job_id": job_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "caller": "Check stack trace to see who called this"
+    }, service="worker_v3")
+    
     log_debug("=== PROCESSING JOB V3 START ===", {
         "job_id": job_id,
         "user_id": user_id,
@@ -196,6 +202,24 @@ def process_job_v3(job: Dict[str, Any]) -> None:
         for key, field_data in result.fields.items():
             fields_dict[key] = field_data.to_dict()
         
+        # LOG CRITICAL INFO: Track what's happening with first_name and last_name
+        log_debug("🔍 CRITICAL: Review status before save", {
+            "review_status": result.metadata.get("review_status"),
+            "fields_needing_review": result.metadata.get("fields_needing_review"),
+            "first_name": {
+                "value": fields_dict.get("first_name", {}).get("value"),
+                "confidence": fields_dict.get("first_name", {}).get("confidence"),
+                "required": fields_dict.get("first_name", {}).get("required"),
+                "needs_review": fields_dict.get("first_name", {}).get("requires_human_review")
+            },
+            "last_name": {
+                "value": fields_dict.get("last_name", {}).get("value"),
+                "confidence": fields_dict.get("last_name", {}).get("confidence"),
+                "required": fields_dict.get("last_name", {}).get("required"),
+                "needs_review": fields_dict.get("last_name", {}).get("requires_human_review")
+            }
+        }, service="worker_v3")
+        
         now = datetime.now(timezone.utc).isoformat()
         review_data = {
             "document_id": job_id,
@@ -210,10 +234,13 @@ def process_job_v3(job: Dict[str, Any]) -> None:
             "updated_at": now
         }
         
-        log_debug("Saving review data", {
+        log_debug("🔍 CRITICAL: Saving review data", {
+            "document_id": job_id,
             "field_count": len(fields_dict),
             "review_status": review_data["review_status"],
-            "pipeline_version": "v3"
+            "fields_needing_review": result.metadata.get("fields_needing_review"),
+            "pipeline_version": "v3",
+            "timestamp": now
         }, service="worker_v3")
         
         update_job_status_with_review(supabase_client, job_id, "complete", review_data)

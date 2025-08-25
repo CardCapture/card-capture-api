@@ -101,6 +101,16 @@ def update_job_status_with_review(
     
     # Then upsert review data 
     print(f"[DATABASE DEBUG] About to upsert reviewed_data...")
+    print(f"[DATABASE DEBUG] 🔍 CRITICAL: Upserting with review_status = {review_data.get('review_status')}")
+    print(f"[DATABASE DEBUG] 🔍 CRITICAL: Document ID = {review_data.get('document_id')}")
+    
+    # Check if this is an UPDATE or INSERT
+    existing = supabase_client.table("reviewed_data").select("review_status").eq("document_id", review_data.get("document_id")).maybe_single().execute()
+    if existing and existing.data:
+        print(f"[DATABASE DEBUG] 🔍 CRITICAL: This is an UPDATE! Previous status = {existing.data.get('review_status')}")
+    else:
+        print(f"[DATABASE DEBUG] 🔍 CRITICAL: This is a NEW INSERT")
+    
     review_response = supabase_client.table("reviewed_data").upsert(review_data, on_conflict="document_id").execute()
     
     print(f"[DATABASE DEBUG] Database operations completed successfully")

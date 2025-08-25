@@ -453,6 +453,8 @@ class EnhancedHighSchoolMatchingService:
                 'review_notes': f"Auto-verified using location context (confidence: {confidence:.2f})",
                 'metadata': {
                     'school_id': best_match.get('id'),
+                    'school_city': best_match.get('city', ''),
+                    'school_state': best_match.get('state', ''),
                     'original_value': high_school_name,
                     'match_confidence': confidence,
                     'location_used': True

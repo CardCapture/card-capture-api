@@ -30,6 +30,7 @@ class FieldData:
     suggestions: Optional[List[Dict]] = None
     requires_human_review: bool = False
     review_notes: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for compatibility with existing code"""
@@ -43,7 +44,8 @@ class FieldData:
             'validation_status': self.validation_status,
             'suggestions': self.suggestions or [],
             'requires_human_review': self.requires_human_review,
-            'review_notes': self.review_notes
+            'review_notes': self.review_notes,
+            'metadata': self.metadata
         }
     
     @classmethod
@@ -59,7 +61,8 @@ class FieldData:
             validation_status=data.get('validation_status'),
             suggestions=data.get('suggestions'),
             requires_human_review=data.get('requires_human_review', False),
-            review_notes=data.get('review_notes', '')
+            review_notes=data.get('review_notes', ''),
+            metadata=data.get('metadata', {})
         )
 
 
