@@ -21,7 +21,9 @@ os.environ['SUPABASE_SERVICE_ROLE_KEY'] = os.environ['SUPABASE_KEY']
 
 from app.pipeline.pipeline import CardProcessingPipeline
 from app.core.clients import get_supabase_client
-from app.repositories.processing_jobs_repository import insert_processing_job, update_processing_job
+from app.repositories.processing_jobs_repository import insert_processing_job
+from app.repositories.uploads_repository import update_job_status_with_review
+from app.services.uploads_service import upload_to_supabase_storage_from_path
 
 def process_card_for_ui():
     """Process a card through Pipeline V3 and save to database for UI viewing"""
@@ -29,7 +31,7 @@ def process_card_for_ui():
     print("=" * 60)
     
     # Select a test card
-    test_image = "test_images/page_1.png"  # You can change this to any test image
+    test_image = "test_images/page_19.png"  # Connor Shore - complete data for testing
     
     if not os.path.exists(test_image):
         print(f"❌ Test image not found: {test_image}")
@@ -39,8 +41,8 @@ def process_card_for_ui():
     
     # Generate test parameters
     school_id = "b1a2c3d4-e5f6-7890-1234-56789abcdef0"  # Your test school
-    user_id = str(uuid.uuid4())  # Generate proper UUID
-    event_id = None
+    user_id = "f8714b88-f5c7-404c-b4fa-2304e014a44b"  # Use existing valid user ID
+    event_id = "06ecee4e-afb7-4444-bb70-490d93408d13"  # Use the correct event ID for UI visibility
     
     print(f"🎯 Processing with:")
     print(f"   School ID: {school_id}")
@@ -51,16 +53,27 @@ def process_card_for_ui():
     supabase_client = get_supabase_client()
     now = datetime.now(timezone.utc).isoformat()
     
-    # Upload test image to a temporary bucket path for testing
-    bucket_path = f"test-uploads/{user_id}/{os.path.basename(test_image)}"
+    # Actually upload the image to Supabase storage
+    print(f"\n📤 Uploading image to Supabase storage...")
+    try:
+        storage_path = upload_to_supabase_storage_from_path(
+            supabase_client,
+            test_image,
+            user_id,
+            os.path.basename(test_image)
+        )
+        print(f"✅ Image uploaded to storage: {storage_path}")
+    except Exception as e:
+        print(f"❌ Failed to upload image: {str(e)}")
+        return None
     
     print(f"\n📋 Creating processing job in database...")
     job_data = {
-        "file_url": bucket_path,
+        "file_url": storage_path,  # Use the actual storage path
         "user_id": user_id,
         "school_id": school_id,
         "event_id": event_id,
-        "status": "processing",
+        "status": "complete",  # Set to complete to prevent trigger from firing
         "created_at": now,
         "updated_at": now
     }
@@ -87,33 +100,28 @@ def process_card_for_ui():
         print(f"   Fields extracted: {len(result.fields)}")
         print(f"   Review status: {result.metadata.get('review_status', 'unknown')}")
         
-        # Convert result to database format
-        fields_for_db = {}
-        for field_name, field_data in result.fields.items():
-            if field_data.value:  # Only save fields with values
-                fields_for_db[field_name] = {
-                    "value": field_data.value,
-                    "confidence_score": field_data.confidence,
-                    "requires_review": field_data.requires_human_review,
-                    "review_notes": field_data.review_notes or ""
-                }
+        # Convert result to database format (same as worker_v3)
+        fields_dict = {}
+        for key, field_data in result.fields.items():
+            fields_dict[key] = field_data.to_dict()
         
-        # Update job with results
+        # Create review data in the same format as worker_v3
         print(f"\n💾 Saving results to database...")
-        update_data = {
-            "status": "completed",
-            "extracted_fields": fields_for_db,
-            "processing_metadata": {
-                "pipeline_version": "v3",
-                "review_status": result.metadata.get('review_status'),
-                "fields_needing_review": result.metadata.get('fields_needing_review', []),
-                "enhancer_results": result.metadata.get('enhancer_results', []),
-                "enhancement_stats": result.metadata.get('enhancement_stats', {})
-            },
-            "updated_at": datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        review_data = {
+            "document_id": job_id,
+            "fields": fields_dict,
+            "school_id": school_id,
+            "user_id": user_id,
+            "event_id": event_id,
+            "image_path": storage_path,  # Use the actual storage path where image was uploaded
+            "review_status": result.metadata.get("review_status"),
+            "created_at": now,
+            "updated_at": now
         }
         
-        update_processing_job(supabase_client, job_id, update_data)
+        # Save using the same method as worker_v3
+        update_job_status_with_review(supabase_client, job_id, "complete", review_data)
         
         print(f"✅ Results saved to database!")
         print(f"\n🎉 SUCCESS! Card processed through Pipeline V3")
@@ -121,34 +129,38 @@ def process_card_for_ui():
         print(f"   Job ID: {job_id}")
         print(f"   User ID: {user_id}")
         print(f"   School ID: {school_id}")
-        print(f"   Status: completed")
-        print(f"   Fields: {len(fields_for_db)}")
+        print(f"   Status: complete")
+        print(f"   Fields: {len(fields_dict)}")
+        print(f"   Review Status: {result.metadata.get('review_status')}")
         
         # Show some key fields
         print(f"\n📝 Sample Extracted Fields:")
         key_fields = ['first_name', 'last_name', 'email', 'high_school', 'ceeb_code', 'address']
         for field_name in key_fields:
-            if field_name in fields_for_db:
-                field_data = fields_for_db[field_name]
-                print(f"   {field_name}: '{field_data['value']}' (confidence: {field_data['confidence_score']:.2f})")
+            if field_name in fields_dict:
+                field_data = fields_dict[field_name]
+                print(f"   {field_name}: '{field_data.get('value')}' (confidence: {field_data.get('confidence', 0):.2f})")
         
         print(f"\n🌐 You should now be able to view this card in your UI!")
         print(f"   Look for job ID: {job_id}")
         print(f"   Or user ID: {user_id}")
+        print(f"   Data is in both 'processing_jobs' and 'reviewed_data' tables")
         
         return {
             "job_id": job_id,
             "user_id": user_id,
             "school_id": school_id,
-            "status": "completed",
+            "status": "complete",
             "pipeline_version": "v3",
-            "fields_count": len(fields_for_db)
+            "fields_count": len(fields_dict),
+            "review_status": result.metadata.get('review_status')
         }
         
     except Exception as e:
         print(f"\n❌ Pipeline processing failed: {str(e)}")
         
-        # Update job with error
+        # Update job with error using correct repository function
+        from app.repositories.processing_jobs_repository import update_processing_job
         update_processing_job(supabase_client, job_id, {
             "status": "failed",
             "error_message": str(e),
