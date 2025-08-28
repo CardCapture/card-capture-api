@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import cards_router, auth_router, uploads_router, events_router, users_router, schools_router, stripe_router, superadmin_router, sftp_router, demo_router, crm_events_router, students_router, registration_router, qr_router, high_schools_router, majors_router
+from app.api.routes.mfa import router as mfa_router
 from app.config import ALLOWED_ORIGINS
 from app.core.error_handling import register_exception_handlers
 
@@ -34,6 +35,7 @@ app.include_router(registration_router)
 app.include_router(qr_router)
 app.include_router(high_schools_router, prefix="/high-schools")
 app.include_router(majors_router, prefix="/majors")
+app.include_router(mfa_router)
 
 @app.get("/")
 async def root():
