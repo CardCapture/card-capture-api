@@ -6,10 +6,20 @@ class HighSchoolsRepository:
         self.client = get_supabase_client()
         self.table = "high_schools_directory"
     
+    def normalize_text(self, text: str) -> str:
+        """Normalize text for better matching by removing apostrophes and other special characters"""
+        # Remove apostrophes and replace with empty string
+        normalized = text.replace("'", "").replace("'", "").replace("`", "")
+        # Replace multiple spaces with single space
+        normalized = " ".join(normalized.split())
+        return normalized
+    
     def search_schools(self, query: str, limit: int = 10, state: Optional[str] = None, city: Optional[str] = None) -> List[Dict[str, Any]]:
         """Search high schools by name with optional state/city filter using fuzzy matching"""
         try:
             results = []
+            # Normalize the query to handle apostrophes
+            normalized_query = self.normalize_text(query)
             
             def build_base_query():
                 """Build base query with common filters"""
@@ -39,7 +49,8 @@ class HighSchoolsRepository:
             if city:
                 try:
                     city_query_builder = build_city_query()
-                    local_results = city_query_builder.ilike("name", f"%{query}%").execute()
+                    # Search with both original and normalized queries
+                    local_results = city_query_builder.ilike("name", f"%{normalized_query}%").execute()
                     if local_results.data:
                         results.extend(local_results.data)
                         print(f"Found {len(local_results.data)} local matches in {city}")
@@ -51,18 +62,27 @@ class HighSchoolsRepository:
             if len(results) < limit:
                 try:
                     query_builder = build_base_query()
-                    direct_results = query_builder.ilike("name", f"%{query}%").execute()
+                    # Try normalized query first
+                    direct_results = query_builder.ilike("name", f"%{normalized_query}%").execute()
                     # Add results that aren't already in our list
                     for result in (direct_results.data or []):
                         if not any(existing['id'] == result['id'] for existing in results):
                             results.append(result)
+                    
+                    # If normalized query didn't find enough results and original query is different, try original too
+                    if len(results) < limit and query != normalized_query:
+                        query_builder = build_base_query()
+                        original_results = query_builder.ilike("name", f"%{query}%").execute()
+                        for result in (original_results.data or []):
+                            if not any(existing['id'] == result['id'] for existing in results):
+                                results.append(result)
                 except Exception as e:
                     print(f"Strategy 1 failed: {e}")
                     pass
             
             # Strategy 2: Search for individual words if query contains multiple words (but limit results)
-            if len(query.split()) > 1 and len(results) < limit:
-                words = [word.strip() for word in query.split() if len(word.strip()) > 2]
+            if len(normalized_query.split()) > 1 and len(results) < limit:
+                words = [word.strip() for word in normalized_query.split() if len(word.strip()) > 2]
                 # Reverse the order - often the most specific word is later in the query
                 for word in reversed(words[:2]):  # Limit to 2 most significant words
                     if len(results) >= limit * 2:  # Don't add too many results
@@ -82,12 +102,12 @@ class HighSchoolsRepository:
             
             # Strategy 3: If we have a city name in the query, try searching by city + school keywords
             # Look for common city-school patterns like "City School", "City High"
-            query_lower = query.lower()
+            normalized_lower = normalized_query.lower()
             potential_city = None
             
             # Extract potential city name if pattern matches
-            if 'high' in query_lower or 'school' in query_lower:
-                words = query.split()
+            if 'high' in normalized_lower or 'school' in normalized_lower:
+                words = normalized_query.split()
                 if len(words) >= 2:
                     # Try first word as potential city name
                     potential_city = words[0]
