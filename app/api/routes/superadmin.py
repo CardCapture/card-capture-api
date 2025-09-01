@@ -7,7 +7,7 @@ import traceback
 
 from app.models.superadmin import SchoolCreate, SchoolResponse, SuperAdminCheck, InviteAdminRequest
 from app.core.superadmin_auth import verify_superadmin
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.controllers.users_controller import invite_user_controller
 
 router = APIRouter(prefix="/superadmin", tags=["SuperAdmin"])
@@ -20,6 +20,7 @@ async def superadmin_health():
     """Health check for SuperAdmin system"""
     try:
         # Test database connection
+        supabase_client = get_supabase_client()
         result = supabase_client.table("schools").select("id").limit(1).execute()
         
         return {
@@ -45,6 +46,7 @@ async def get_schools(current_user: Dict[str, Any] = Depends(verify_superadmin))
         log(f"📊 Getting all schools for SuperAdmin: {current_user['email']}")
         
         # Get all schools using service role
+        supabase_client = get_supabase_client()
         schools_result = supabase_client.table("schools").select("*").order("created_at", desc=True).execute()
         
         if not schools_result.data:
@@ -88,6 +90,7 @@ async def create_school(school: SchoolCreate, current_user: Dict[str, Any] = Dep
         if school.docai_processor_id:
             school_data["docai_processor_id"] = school.docai_processor_id.strip()
         
+        supabase_client = get_supabase_client()
         result = supabase_client.table("schools").insert(school_data).execute()
         
         if result.data:
@@ -141,6 +144,7 @@ async def invite_school_admin(
         log(f"📧 Inviting admin for school {school_id}: {invite_request.email} by {current_user['email']}")
         
         # Verify school exists
+        supabase_client = get_supabase_client()
         school_result = supabase_client.table("schools").select("name").eq("id", school_id).execute()
         if not school_result.data:
             log(f"❌ School not found: {school_id}")

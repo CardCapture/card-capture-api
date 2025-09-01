@@ -22,9 +22,9 @@ serve(async (req) => {
     const jobId = record.id;
     console.log(`Processing job trigger for jobId: ${jobId}`);
 
-    // Make request to Cloud Run service with /process endpoint
+    // Make request to Cloud Run service with /process endpoint (now using unified worker with V3)
     const cloudRunUrl = Deno.env.get("WORKER_URL") || 
-      "https://card-capture-worker-v2-staging-878585200500.us-central1.run.app/process";
+      "https://card-capture-worker-unified-staging-878585200500.us-central1.run.app/process";
 
     const response = await fetch(cloudRunUrl, {
       method: "POST",

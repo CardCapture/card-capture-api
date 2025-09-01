@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer
 from jose import JWTError, jwt
 import os
 import logging
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 
 security = HTTPBearer()
 
@@ -32,6 +32,7 @@ async def verify_superadmin(token: str = Depends(security)):
         
         # Check if user is SuperAdmin using service role
         # Note: Using the existing supabase_client which is already configured with service role key
+        supabase_client = get_supabase_client()
         result = supabase_client.table("profiles").select("school_id, email, first_name, last_name, role").eq("id", user_id).execute()
         
         if not result.data:

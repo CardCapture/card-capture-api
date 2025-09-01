@@ -1,5 +1,5 @@
 from fastapi import HTTPException
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 import re
 from typing import List
 import os
@@ -47,6 +47,7 @@ def invite_user_db(email: str, first_name: str, last_name: str, role: List[str],
     
     try:
         # Send magic link email for invite
+        supabase_client = get_supabase_client()
         magic_link_response = send_magic_link_email_db(
             supabase_client, 
             email, 

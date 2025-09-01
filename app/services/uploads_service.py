@@ -450,6 +450,7 @@ async def export_to_slate_service(payload: dict):
             'zip_code': 'Zip Code',
             'zip': 'Zip Code',
             'high_school': 'High School',
+            'ceeb_code': 'CEEB Code',
             'class_rank': 'Class Rank',
             'students_in_class': 'Students in Class',
             'gpa': 'GPA',

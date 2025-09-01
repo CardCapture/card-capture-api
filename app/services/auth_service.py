@@ -1,5 +1,5 @@
 from fastapi import Request, HTTPException
-from app.core.clients import supabase_auth, supabase_client
+from app.core.clients import get_supabase_auth, get_supabase_client
 import os
 from jose import jwt, JWTError
 from app.repositories.auth_repository import (
@@ -16,6 +16,7 @@ from app.utils.retry_utils import log_debug
 async def login_service(credentials: dict):
     try:
         log_debug("Login attempt for:", credentials.get("email"), service="auth")
+        supabase_auth = get_supabase_auth()
         response = login_db(supabase_auth, credentials)
         log_debug("Login successful", service="auth")
         return response
@@ -33,6 +34,7 @@ async def read_current_user_service(request: Request):
         token = auth_header.split(" ")[1]
         
         # Get user from token
+        supabase_client = get_supabase_client()
         user_response = supabase_client.auth.get_user(token)
         if not user_response.user:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -62,6 +64,7 @@ async def reset_password_service(payload: dict):
             raise HTTPException(status_code=400, detail="Email is required")
         
         log_debug(f"Password reset request for: {email}", service="auth")
+        supabase_client = get_supabase_client()
         response = reset_password_db(supabase_client, email)
         log_debug(f"Password reset email sent to: {email}", service="auth")
         return {"message": "Password reset email sent successfully"}
@@ -76,6 +79,7 @@ async def validate_magic_link_service(token: str):
     try:
         log_debug(f"Validating magic link token: {token[:8]}...", service="auth")
         
+        supabase_client = get_supabase_client()
         magic_link = validate_magic_link_db(supabase_client, token)
         
         if not magic_link:
@@ -96,6 +100,7 @@ async def consume_magic_link_service(token: str, link_type: str):
         log_debug(f"Processing magic link: {token[:8]}... (type: {link_type})", service="auth")
         
         # First validate the magic link
+        supabase_client = get_supabase_client()
         magic_link = validate_magic_link_db(supabase_client, token)
         
         if not magic_link:
@@ -192,6 +197,7 @@ async def create_user_service(payload: dict):
         log_debug(f"Creating/updating user account for: {email}", service="auth")
         
         # Check if user already exists
+        supabase_client = get_supabase_client()
         existing_user = None
         try:
             auth_users = supabase_client.auth.admin.list_users()

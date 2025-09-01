@@ -357,9 +357,13 @@ def parse_gemini_quality_response(response_text: str, docai_fields: Dict[str, An
                 }
             
             # Update with Gemini data and preserve all quality indicators
+            # Calculate enhanced confidence score
+            enhanced_confidence = calculate_confidence_from_quality(quality_info)
+            
             enhanced_field.update({
                 "value": quality_info.get("value", ""),
                 "source": "gemini",
+                "confidence": enhanced_confidence,  # Use our enhanced confidence calculation
                 "edit_made": quality_info.get("edit_made", False),
                 "edit_type": quality_info.get("edit_type", "none"),
                 "original_value": quality_info.get("original_value", ""),
@@ -368,7 +372,7 @@ def parse_gemini_quality_response(response_text: str, docai_fields: Dict[str, An
                 "notes": quality_info.get("notes", ""),
                 "field_type": quality_info.get("field_type", "text"),
                 "detected_options": quality_info.get("detected_options", []),
-                "review_confidence": calculate_confidence_from_quality(quality_info),
+                "review_confidence": enhanced_confidence,
                 "requires_human_review": False,
                 "review_notes": ""
             })
@@ -496,8 +500,22 @@ def calculate_confidence_from_quality(quality_info: Dict[str, Any]) -> float:
         if certainty == "mostly_certain":
             certainty_mod = 1.0
     
-    # Calculate final score
+    # Calculate base final score
     final_score = base_score * certainty_mod * edit_mod
+    
+    # Special domain-specific confidence boosting for emails
+    # Valid email patterns should get high confidence regardless of OCR quality
+    if "@" in value and "." in value:
+        # Basic email pattern detected
+        email_parts = value.split("@")
+        if len(email_parts) == 2 and email_parts[1]:
+            domain = email_parts[1].lower()
+            # Known school domains get very high confidence
+            if any(school_domain in domain for school_domain in ["wyliebulldogs.org", "mcm.edu", "acu.edu", "umhb.edu"]):
+                return 0.95  # Very high confidence for school email patterns
+            # Any reasonable email pattern gets decent confidence
+            elif len(domain) > 3 and "." in domain:
+                return max(final_score, 0.75)  # Boost to at least 75% for valid email patterns
     
     # Ensure score is between 0.0 and 1.0
     return min(max(final_score, 0.0), 1.0)

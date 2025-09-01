@@ -104,55 +104,63 @@ def validate_address(
         google_result = _validate_with_google_maps(address, city, state, zip_code, original_query)
         
         if google_result:
-            # First check if it's a complete address with house number
+            # Check if it's a complete address with house number
             is_complete_address = _is_complete_deliverable_address(google_result)
             
+            # If not complete, we'll still check confidence, but be more conservative
             if not is_complete_address:
-                log_debug("Google Maps result lacks house number - treating as NOT_VERIFIED", {
+                log_debug("Google Maps result lacks house number - will check confidence", {
                     "formatted_address": google_result.get('formatted_address'),
                     "street_number": google_result.get('street_number'),
                     "street_address": google_result.get('street_address')
                 }, service="address_validation")
-                return AddressValidationResult(
-                    "not_verified",
-                    error="Address not found in Google Maps",
-                    original_query=original_query
-                )
             
             # Get confidence score
             confidence_score = google_result.get('confidence_score', 0)
             
-            # High confidence (80+) = treat as verified even if not exact match
-            # This handles cases where Google standardizes the address format
-            if confidence_score >= 80:
-                log_debug(f"High confidence match (score: {confidence_score}) - VERIFIED", service="address_validation")
-                return AddressValidationResult(
-                    "verified",
-                    is_valid=True,
-                    suggestion=_format_suggestion(google_result),
-                    original_query=original_query
-                )
+            # For complete addresses (with house number), use normal thresholds
+            if is_complete_address:
+                # High confidence (80+) = treat as verified
+                if confidence_score >= 80:
+                    log_debug(f"Complete address with high confidence (score: {confidence_score}) - VERIFIED", service="address_validation")
+                    return AddressValidationResult(
+                        "verified",
+                        is_valid=True,
+                        suggestion=_format_suggestion(google_result),
+                        original_query=original_query
+                    )
+                
+                # Medium confidence (60-79) = can be verified
+                elif confidence_score >= 60:
+                    log_debug(f"Complete address with medium confidence (score: {confidence_score}) - CAN BE VERIFIED", service="address_validation")
+                    return AddressValidationResult(
+                        "can_be_verified",
+                        is_valid=True,
+                        suggestion=_format_suggestion(google_result),
+                        original_query=original_query
+                    )
             
-            # Medium confidence (60-79) = can be verified
-            # User should review but we're fairly confident
-            elif confidence_score >= 60:
-                log_debug(f"Medium confidence match (score: {confidence_score}) - CAN BE VERIFIED", service="address_validation")
-                return AddressValidationResult(
-                    "can_be_verified",
-                    is_valid=True,
-                    suggestion=_format_suggestion(google_result),
-                    original_query=original_query
-                )
-            
-            # Low confidence (< 60) = not verified
-            # Too uncertain to suggest
+            # For incomplete addresses (missing house number), be more conservative
             else:
-                log_debug(f"Low confidence match (score: {confidence_score}) - NOT VERIFIED", service="address_validation")
-                return AddressValidationResult(
-                    "not_verified",
-                    error="Could not confidently validate address",
-                    original_query=original_query
-                )
+                # Only treat as "can be verified" with high confidence, and only if we have a good street match
+                if confidence_score >= 70 and google_result.get('street_name'):
+                    log_debug(f"Incomplete address but high confidence street match (score: {confidence_score}) - CAN BE VERIFIED", service="address_validation")
+                    return AddressValidationResult(
+                        "can_be_verified",
+                        is_valid=True,
+                        suggestion=_format_suggestion(google_result),
+                        original_query=original_query,
+                        error="Street found but house number could not be verified"
+                    )
+                
+                # Lower confidence for incomplete addresses = not verified
+                else:
+                    log_debug(f"Incomplete address with low confidence (score: {confidence_score}) - NOT_VERIFIED", service="address_validation")
+                    return AddressValidationResult(
+                        "not_verified",
+                        error="Address not found in Google Maps",
+                        original_query=original_query
+                    )
         else:
             log_debug("No Google Maps results found - NOT VERIFIED", service="address_validation")
             return AddressValidationResult(
@@ -555,20 +563,26 @@ def _calculate_confidence_score(google_result: Dict[str, Any], original_query: D
         
         # Special handling for addresses where Google filled in missing components
         if missing_components_filled > 0:
-            log_debug(f"Google Maps filled {missing_components_filled} missing components - targeting 'can_be_verified' range", service="address_validation")
+            log_debug(f"Google Maps filled {missing_components_filled} missing components", service="address_validation")
             
-            # For addresses with missing components that Google filled in,
-            # we want "can_be_verified" (60-79) not "verified" (80+)
-            # This ensures user sees validation UI to accept the completion
-            if score >= 80:
-                # Cap high-confidence results at 75 when components were filled
-                # This forces "can_be_verified" behavior for better UX
-                score = 75
-                log_debug(f"Capped confidence at 75 to ensure 'can_be_verified' UI for component completion", service="address_validation")
-            elif score < 60:
-                # Boost low confidence to at least 60 if Google could fill components
-                score = 60
-                log_debug(f"Boosted confidence to 60 to enable validation UI", service="address_validation")
+            # Simplified logic: Trust Google Maps if it has high confidence
+            # If Google can find a precise location match, it's reliable regardless of what was missing
+            if (score >= 85 and  # High confidence match
+                location_type in ['ROOFTOP', 'RANGE_INTERPOLATED']):  # Precise location
+                
+                log_debug(f"Auto-verifying: Google Maps has high confidence (score: {score}, type: {location_type})", service="address_validation")
+                # Keep high score for auto-verification (80+ = verified)
+                
+            elif score >= 70:
+                # Medium confidence - still likely good but let user verify
+                log_debug(f"Medium confidence: allowing verification (score: {score})", service="address_validation")
+                if score >= 80:
+                    score = 75  # Cap at 75 to show "can_be_verified"
+                
+            else:
+                # Low confidence - boost slightly if Google could fill components
+                log_debug(f"Low confidence: boosting to enable validation UI (score: {score})", service="address_validation")
+                score = max(score, 60)  # Ensure at least 60 for validation UI
     
     return min(score, 100)  # Final cap at 100
 
@@ -644,17 +658,27 @@ def validate_address_for_pipeline(fields: Dict[str, Any]) -> Tuple[Dict[str, Any
                 fields['address']['review_notes'] = 'Auto-verified by Google Maps (high confidence)'
                 fields['address']['source'] = 'google_maps_verified'
                 
-            if 'city' in fields:
+            # Update or create city field
+            if suggestion.get('city'):
+                if 'city' not in fields:
+                    fields['city'] = {}
                 fields['city']['value'] = suggestion.get('city', city)
                 fields['city']['requires_human_review'] = False
                 fields['city']['review_notes'] = 'Auto-verified by Google Maps (high confidence)'
                 fields['city']['source'] = 'google_maps_verified'
+                fields['city']['enabled'] = True
+                fields['city']['required'] = False
                 
-            if 'state' in fields:
+            # Update or create state field
+            if suggestion.get('state'):
+                if 'state' not in fields:
+                    fields['state'] = {}
                 fields['state']['value'] = suggestion.get('state', state)
                 fields['state']['requires_human_review'] = False
                 fields['state']['review_notes'] = 'Auto-verified by Google Maps (high confidence)'
                 fields['state']['source'] = 'google_maps_verified'
+                fields['state']['enabled'] = True
+                fields['state']['required'] = False
                 
             if 'zip_code' in fields:
                 fields['zip_code']['value'] = suggestion.get('zip_code', zip_code)
@@ -679,13 +703,21 @@ def validate_address_for_pipeline(fields: Dict[str, Any]) -> Tuple[Dict[str, Any
                 fields['address']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
                 fields['address']['source'] = 'google_maps_suggested'
                 
-            if 'city' in fields:
+            # Update or create city field
+            if suggestion.get('city'):
+                if 'city' not in fields:
+                    fields['city'] = {}
                 fields['city']['value'] = suggestion.get('city', city)
                 fields['city']['requires_human_review'] = False
                 fields['city']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
                 fields['city']['source'] = 'google_maps_suggested'
+                fields['city']['enabled'] = True
+                fields['city']['required'] = False
                 
-            if 'state' in fields:
+            # Update or create state field
+            if suggestion.get('state'):
+                if 'state' not in fields:
+                    fields['state'] = {}
                 fields['state']['value'] = suggestion.get('state', state)
                 fields['state']['requires_human_review'] = False
                 fields['state']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
