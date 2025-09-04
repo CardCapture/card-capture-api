@@ -12,7 +12,7 @@ import tempfile
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 import google.generativeai as genai
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.utils.retry_utils import log_debug
 
 def download_from_supabase(file_url: str, local_path: str) -> None:
@@ -290,6 +290,7 @@ async def create_reviewed_data_record(
     
     try:
         # Insert into reviewed_data table
+        supabase_client = get_supabase_client()
         response = supabase_client.table("reviewed_data").insert(review_data).execute()
         
         if not response.data:

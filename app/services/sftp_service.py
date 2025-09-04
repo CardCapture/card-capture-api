@@ -1,5 +1,5 @@
 from fastapi.responses import JSONResponse
-from app.core.clients import supabase_client
+from app.core.clients import get_supabase_client
 from app.utils.retry_utils import log_debug
 from typing import Dict, Any, Optional
 import traceback
@@ -65,6 +65,7 @@ async def create_or_update_sftp_config_service(payload: Dict[str, Any], user: Di
         }
 
         # Check if config already exists
+        supabase_client = get_supabase_client()
         existing_result = supabase_client.table("sftp_configs").select("id").eq("school_id", school_id).execute()
 
         if existing_result.data:
@@ -267,6 +268,7 @@ async def get_sftp_config_service(school_id: str, user: Dict[str, Any]):
         log_debug(f"SFTP CONFIG: Fetching config for school_id: {school_id}", service="sftp")
 
         # Fetch SFTP config
+        supabase_client = get_supabase_client()
         result = supabase_client.table("sftp_configs").select("*").eq("school_id", school_id).execute()
 
         if not result.data:
