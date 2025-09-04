@@ -405,24 +405,54 @@ async def create_mfa_challenge(
         factors_response = session_client.auth.mfa.list_factors()
         print(f"[MFA Challenge] Factors response: {factors_response}")
         
-        if not factors_response.data:
+        # Handle the response structure - it has 'all', 'totp', and 'phone' attributes
+        if hasattr(factors_response, 'all'):
+            all_factors = factors_response.all
+            phone_factors = factors_response.phone if hasattr(factors_response, 'phone') else []
+        elif hasattr(factors_response, 'data'):
+            # If data is a dict with 'all' key
+            if isinstance(factors_response.data, dict) and 'all' in factors_response.data:
+                all_factors = factors_response.data.get('all', [])
+                phone_factors = factors_response.data.get('phone', [])
+            else:
+                all_factors = factors_response.data if factors_response.data else []
+                phone_factors = []
+        else:
+            all_factors = []
+            phone_factors = []
+        
+        print(f"[MFA Challenge] All factors: {all_factors}")
+        print(f"[MFA Challenge] Phone factors: {phone_factors}")
+        
+        if not all_factors:
             print(f"[MFA Challenge] No MFA factors found")
             raise HTTPException(status_code=400, detail="No MFA factors enrolled")
         
-        # Find phone factor (including unverified ones for test purposes)
-        all_factors = factors_response.data if hasattr(factors_response.data, '__iter__') and not isinstance(factors_response.data, str) else getattr(factors_response, 'all', [])
-        phone_factor = next((f for f in all_factors if getattr(f, 'factor_type', None) == 'phone' or (isinstance(f, dict) and f.get('factor_type') == 'phone')), None)
+        # Find phone factor from all_factors (including unverified ones for test purposes)
+        phone_factor = None
+        for f in all_factors:
+            if hasattr(f, 'factor_type') and f.factor_type == 'phone':
+                phone_factor = f
+                break
+            elif isinstance(f, dict) and f.get('factor_type') == 'phone':
+                phone_factor = f
+                break
+        
         print(f"[MFA Challenge] Phone factor: {phone_factor}")
         
         # Convert factor object to dict if needed
-        if phone_factor and hasattr(phone_factor, '__dict__'):
-            phone_factor_dict = {
-                'id': getattr(phone_factor, 'id', ''),
-                'factor_type': getattr(phone_factor, 'factor_type', ''),
-                'status': getattr(phone_factor, 'status', ''),
-                'phone': getattr(phone_factor, 'phone', '')
-            }
-            phone_factor = phone_factor_dict
+        if phone_factor:
+            if hasattr(phone_factor, 'id'):
+                # It's an object, convert to dict
+                phone_factor_dict = {
+                    'id': getattr(phone_factor, 'id', ''),
+                    'factor_type': getattr(phone_factor, 'factor_type', ''),
+                    'status': getattr(phone_factor, 'status', ''),
+                    'phone': getattr(phone_factor, 'phone', '')
+                }
+                phone_factor = phone_factor_dict
+            # If it's already a dict, keep it as is
+            print(f"[MFA Challenge] Phone factor after conversion: {phone_factor}")
         
         if not phone_factor:
             print(f"[MFA Challenge] No phone factor found in all_factors: {all_factors}")
@@ -457,11 +487,12 @@ async def create_mfa_challenge(
         
         # Create challenge (sends SMS) using session-aware client
         try:
+            factor_id = phone_factor.get('id') if isinstance(phone_factor, dict) else getattr(phone_factor, 'id')
             challenge_response = session_client.auth.mfa.challenge({
-                'factor_id': phone_factor['id']
+                'factor_id': factor_id
             })
             
-            if challenge_response.error:
+            if hasattr(challenge_response, 'error') and challenge_response.error:
                 raise Exception(f"Challenge creation failed: {challenge_response.error}")
                 
         except Exception as challenge_error:
@@ -475,9 +506,10 @@ async def create_mfa_challenge(
             if is_test_phone:
                 print(f"[MFA Challenge] Using mock challenge for test phone")
                 # Create a mock challenge response
+                factor_id = phone_factor.get('id') if isinstance(phone_factor, dict) else getattr(phone_factor, 'id')
                 challenge_response = type('MockResponse', (), {
                     'data': {
-                        'id': 'test_challenge_' + phone_factor['id'][:8],
+                        'id': 'test_challenge_' + factor_id[:8],
                         'type': 'phone'
                     },
                     'error': None
@@ -490,11 +522,29 @@ async def create_mfa_challenge(
             'last_challenge_at': datetime.now(timezone.utc).isoformat()
         }).eq('user_id', user_id).execute()
         
+        # Get factor details
+        factor_id = phone_factor.get('id') if isinstance(phone_factor, dict) else getattr(phone_factor, 'id')
+        
+        # Get phone number from user settings since factor doesn't include it
+        phone_number = result.data.get('phone_number', '') if result.data else ''
+        
+        # Extract challenge_id properly
+        challenge_id = None
+        if hasattr(challenge_response, 'data') and challenge_response.data:
+            if isinstance(challenge_response.data, dict):
+                challenge_id = challenge_response.data.get('id')
+            else:
+                challenge_id = getattr(challenge_response.data, 'id', None)
+        elif isinstance(challenge_response, dict):
+            challenge_id = challenge_response.get('id')
+        
+        print(f"[MFA Challenge] Final response - challenge_id: {challenge_id}, phone_number: {phone_number}, phone_masked: {phone_number[-4:] if phone_number else 'N/A'}")
+        
         return JSONResponse(content={
             "mfa_required": True,
-            "factor_id": phone_factor['id'],
-            "challenge_id": challenge_response.data.get('id'),
-            "phone_masked": phone_factor.get('phone', '')[-4:]  # Last 4 digits
+            "factor_id": factor_id,
+            "challenge_id": challenge_id,
+            "phone_masked": phone_number[-4:] if phone_number else ''  # Last 4 digits
         })
         
     except Exception as e:
@@ -504,6 +554,7 @@ async def create_mfa_challenge(
 async def verify_mfa(
     request: Request,
     factor_id: str = Body(...),
+    challenge_id: Optional[str] = Body(default=None),
     code: str = Body(...),
     remember_device: bool = Body(default=False),
     device_name: Optional[str] = Body(default=None),
@@ -525,16 +576,48 @@ async def verify_mfa(
         
         print(f"[MFA Verify] Phone: {phone_number}, Is test phone: {is_test_phone}, Is test code: {is_test_code}")
         
-        # Verify the code using session-aware client
+        # Verify the code using session-aware client  
         session_client = get_session_aware_supabase_client(request)
-        auth_response = session_client.auth.mfa.verify({
-            'factor_id': factor_id,
-            'code': code
-        })
         
-        if auth_response.error and not (is_test_phone and is_test_code):
+        try:
+            # For SMS verification, we need to use the challenge_id
+            if challenge_id:
+                print(f"[MFA Verify] Verifying with challenge_id: {challenge_id}")
+                # SMS verification with challenge
+                auth_response = session_client.auth.mfa.verify({
+                    'factor_id': factor_id,
+                    'challenge_id': challenge_id,
+                    'code': code
+                })
+            else:
+                print(f"[MFA Verify] Verifying without challenge_id (TOTP mode)")
+                # TOTP verification (no challenge_id needed)
+                auth_response = session_client.auth.mfa.verify({
+                    'factor_id': factor_id,
+                    'code': code
+                })
+            
+            print(f"[MFA Verify] Auth response: {auth_response}")
+            
+        except Exception as verify_error:
+            print(f"[MFA Verify] Verification error: {verify_error}")
+            if is_test_phone and is_test_code:
+                # For test phone with test code, simulate successful verification
+                print(f"[MFA Verify] Using test bypass for login verification")
+                # Create a mock successful response
+                auth_response = type('MockResponse', (), {
+                    'data': {
+                        'user': current_user,
+                        'session': {'access_token': 'test_token', 'refresh_token': 'test_refresh'}
+                    },
+                    'error': None
+                })()
+            else:
+                raise HTTPException(status_code=400, detail="Invalid verification code")
+        
+        if hasattr(auth_response, 'error') and auth_response.error and not (is_test_phone and is_test_code):
             raise HTTPException(status_code=400, detail="Invalid verification code")
-        elif auth_response.error and is_test_phone and is_test_code:
+        elif hasattr(auth_response, 'error') and auth_response.error and is_test_phone and is_test_code:
             # For test phone with test code, simulate successful verification
             print(f"[MFA Verify] Using test bypass for login verification")
             # Create a mock successful response
