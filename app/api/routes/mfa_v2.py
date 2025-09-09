@@ -60,6 +60,19 @@ class MFAService:
             return user_data.get('factors', [])
     
     @staticmethod
+    async def delete_factor(token: str, factor_id: str) -> bool:
+        """Delete an MFA factor"""
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{SUPABASE_URL}/auth/v1/factors/{factor_id}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "apikey": SUPABASE_ANON_KEY
+                }
+            )
+            return response.status_code in [200, 204]
+    
+    @staticmethod
     async def create_factor(token: str, phone_number: str) -> Dict[str, Any]:
         """Create a new MFA factor"""
         print(f"[MFA Service] Creating factor with phone: {repr(phone_number)}")
@@ -225,19 +238,20 @@ async def enroll_mfa(
                 "message": "Verification code sent to your enrolled phone"
             })
         
-        # Check for unverified factors
+        # Check for unverified factors and delete them
         unverified_phone_factors = [
             f for f in existing_factors
             if f.get('factor_type') == 'phone' and f.get('status') == 'unverified'
         ]
         
-        if unverified_phone_factors:
-            print(f"[MFA Enroll] Using existing unverified factor")
-            factor = unverified_phone_factors[0]
-        else:
-            print(f"[MFA Enroll] Creating new factor")
-            # Create new factor
-            factor = await MFAService.create_factor(token, phone_number)
+        # Delete all existing unverified factors before creating a new one
+        for old_factor in unverified_phone_factors:
+            print(f"[MFA Enroll] Deleting old unverified factor: {old_factor['id']}")
+            await MFAService.delete_factor(token, old_factor['id'])
+        
+        # Now create a new factor with the provided phone number
+        print(f"[MFA Enroll] Creating new factor with phone: {phone_number}")
+        factor = await MFAService.create_factor(token, phone_number)
         
         # Create challenge
         print(f"[MFA Enroll] Creating challenge for factor {factor['id']}")
