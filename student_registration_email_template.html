@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complete your CardCapture registration</title>
+    <style>
+        /* Reset and base styles */
+        body, table, td, p, a, li, blockquote {
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+        }
+        
+        table, td {
+            mso-table-lspace: 0pt;
+            mso-table-rspace: 0pt;
+        }
+        
+        img {
+            -ms-interpolation-mode: bicubic;
+            border: 0;
+            height: auto;
+            line-height: 100%;
+            outline: none;
+            text-decoration: none;
+        }
+        
+        /* Modern gradient background matching the website */
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #dbeafe 0%, #ffffff 50%, #f3e8ff 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        
+        .outer-container {
+            padding: 40px 20px;
+        }
+        
+        /* Clean header with logo only */
+        .header {
+            background: #ffffff;
+            padding: 32px 32px 16px 32px;
+            text-align: center;
+        }
+        
+        .logo-container {
+            position: relative;
+            z-index: 2;
+        }
+        
+        .header img {
+            max-width: 160px;
+            height: auto;
+        }
+        
+        .logo-text {
+            color: #1e293b;
+            font-size: 28px;
+            font-weight: 700;
+            margin: 0;
+            letter-spacing: -0.5px;
+        }
+        
+        /* Content styling */
+        .content {
+            padding: 32px 32px 48px 32px;
+            position: relative;
+        }
+        
+        
+        .main-title {
+            font-size: 48px;
+            font-weight: 700;
+            color: #1e293b;
+            margin: 0 0 16px 0;
+            text-align: center;
+            line-height: 1.1;
+            letter-spacing: -1px;
+        }
+        
+        .main-title .highlight {
+            color: #3b82f6;
+        }
+        
+        .subtitle {
+            font-size: 20px;
+            color: rgba(71, 85, 105, 0.8);
+            margin: 0 0 32px 0;
+            text-align: center;
+            line-height: 1.5;
+            max-width: 480px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        /* Thinner CTA button */
+        .cta-container {
+            text-align: center;
+            margin: 48px 0;
+        }
+        
+        .cta-button {
+            display: inline-block;
+            background: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 16px 32px;
+            border-radius: 12px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            font-weight: 500;
+            font-size: 16px;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+            transition: all 0.2s ease;
+            letter-spacing: -0.25px;
+        }
+        
+        .cta-button:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(59, 130, 246, 0.5);
+        }
+        
+        .security-notice {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 32px 0;
+            text-align: center;
+        }
+        
+        .security-notice-text {
+            font-size: 14px;
+            color: rgba(71, 85, 105, 0.8);
+            margin: 0;
+        }
+        
+        /* Footer */
+        .footer {
+            background: rgba(248, 250, 252, 0.5);
+            padding: 32px;
+            text-align: center;
+            border-top: 1px solid rgba(226, 232, 240, 0.5);
+        }
+        
+        .footer-text {
+            font-size: 12px;
+            color: rgba(71, 85, 105, 0.6);
+            margin: 0 0 8px 0;
+            line-height: 1.4;
+        }
+        
+        .footer-link {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        
+        .footer-link:hover {
+            text-decoration: underline;
+        }
+        
+        /* Mobile responsive */
+        @media screen and (max-width: 600px) {
+            .outer-container {
+                padding: 20px 12px;
+            }
+            
+            .email-container {
+                border-radius: 12px;
+            }
+            
+            .content, .header, .footer {
+                padding-left: 20px !important;
+                padding-right: 20px !important;
+            }
+            
+            .main-title {
+                font-size: 32px !important;
+            }
+            
+            .subtitle {
+                font-size: 18px !important;
+            }
+            
+            .cta-button {
+                display: block !important;
+                width: 100% !important;
+                box-sizing: border-box;
+                padding: 14px 24px !important;
+                font-size: 16px !important;
+            }
+            
+            .logo-text {
+                font-size: 24px !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="outer-container">
+        <div class="email-container">
+            <!-- Clean header with logo -->
+            <div class="header">
+                <div class="logo-container">
+                    <img src="https://assets.cardcapture.io/storage/v1/object/public/assets/cc-logo-transparent-min.png" alt="CardCapture" style="display: block; margin: 0 auto;" />
+                </div>
+            </div>
+            
+            <!-- Main Content -->
+            <div class="content">
+                <!-- Main headline -->
+                <h1 class="main-title">Your Info, <span class="highlight">Your Control</span></h1>
+                <p class="subtitle">One profile that works everywhere. Update once, share securely.</p>
+                
+                <!-- CTA Button -->
+                <div class="cta-container">
+                    <a href="{{MAGIC_LINK_URL}}" class="cta-button">Complete Registration →</a>
+                </div>
+                
+                <!-- Security notice -->
+                <div class="security-notice">
+                    <p class="security-notice-text">🔒 This link is secure and expires in 24 hours for your protection</p>
+                </div>
+            </div>
+            
+            <!-- Footer -->
+            <div class="footer">
+                <p class="footer-text">© {{CURRENT_YEAR}} CardCapture. All rights reserved.</p>
+                <p class="footer-text">
+                    <a href="{{SITE_URL}}/privacy" class="footer-link">Privacy Policy</a> | 
+                    <a href="{{SITE_URL}}/terms" class="footer-link">Terms of Service</a>
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
