@@ -29,15 +29,16 @@ def get_session_aware_supabase_client(request: Request) -> Client:
     
     access_token = auth_header.split(" ", 1)[1]
     
-    # Create client with anon key, then set the session
+    # Create client with anon key
     client = create_client(
         os.getenv("SUPABASE_URL"),
         os.getenv("SUPABASE_ANON_KEY")
     )
     
-    # Set the session with the user's access token and refresh token
-    # For MFA operations, we need the user's session context
-    client.auth.set_session(access_token, access_token)  # Using access token for both
+    # For MFA operations, we need to use the user's token directly
+    # We can't use set_session without a refresh token, so we'll make direct API calls
+    # Return the client with the access token stored for later use
+    client.auth.access_token = access_token
     
     return client
 
@@ -84,13 +85,19 @@ async def enroll_mfa(
                 import httpx
                 access_token = request.headers.get("Authorization").split(" ", 1)[1]
                 
+                # Get user's real IP address
+                user_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+                if user_ip and "," in user_ip:
+                    user_ip = user_ip.split(",")[0].strip()
+                
                 # Create a challenge for the existing factor
                 challenge_response = httpx.post(
                     f"{os.getenv('SUPABASE_URL')}/auth/v1/factors/{existing_phone_factor.id}/challenge",
                     headers={
                         "Authorization": f"Bearer {access_token}",
                         "Content-Type": "application/json",
-                        "apikey": os.getenv("SUPABASE_ANON_KEY")
+                        "apikey": os.getenv("SUPABASE_ANON_KEY"),
+                        "X-Forwarded-For": user_ip
                     },
                     json={}
                 )
@@ -143,12 +150,18 @@ async def enroll_mfa(
                 import httpx
                 access_token = request.headers.get("Authorization").split(" ", 1)[1]
                 
+                # Get user's real IP address
+                user_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+                if user_ip and "," in user_ip:
+                    user_ip = user_ip.split(",")[0].strip()
+                
                 direct_response = httpx.post(
                     f"{os.getenv('SUPABASE_URL')}/auth/v1/factors",
                     headers={
                         "Authorization": f"Bearer {access_token}",
                         "Content-Type": "application/json",
-                        "apikey": os.getenv("SUPABASE_ANON_KEY")
+                        "apikey": os.getenv("SUPABASE_ANON_KEY"),
+                        "X-Forwarded-For": user_ip
                     },
                     json={
                         "factor_type": "phone",
@@ -170,7 +183,8 @@ async def enroll_mfa(
                         headers={
                             "Authorization": f"Bearer {access_token}",
                             "Content-Type": "application/json",
-                            "apikey": os.getenv("SUPABASE_ANON_KEY")
+                            "apikey": os.getenv("SUPABASE_ANON_KEY"),
+                            "X-Forwarded-For": user_ip
                         },
                         json={}  # Add empty JSON body
                     )
@@ -260,15 +274,21 @@ async def verify_enrollment(
         
         print(f"[MFA Verify Enrollment] Phone: {phone_number}, Is test phone: {is_test_phone}, Is test code: {is_test_code}")
         
+        # Get user's real IP address
+        user_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+        if user_ip and "," in user_ip:
+            user_ip = user_ip.split(",")[0].strip()
+        
         # First try: Challenge verification (correct approach for enrollment)
         if challenge_id:
-            print(f"[MFA Verify Enrollment] Using challenge verification endpoint")
+            print(f"[MFA Verify Enrollment] Using challenge verification endpoint with IP: {user_ip}")
             challenge_verify_response = httpx.post(
                 f"{os.getenv('SUPABASE_URL')}/auth/v1/factors/{factor_id}/verify",
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Content-Type": "application/json",
-                    "apikey": os.getenv("SUPABASE_ANON_KEY")
+                    "apikey": os.getenv("SUPABASE_ANON_KEY"),
+                    "X-Forwarded-For": user_ip
                 },
                 json={
                     "challenge_id": challenge_id,
@@ -365,17 +385,33 @@ async def verify_enrollment(
                 raise HTTPException(status_code=400, detail="Invalid verification code")
         
         # Mark MFA as enabled in our settings
-        supabase_client.table('user_mfa_settings').update({
+        print(f"[MFA Verify Enrollment] Updating MFA settings for user: {user_id}")
+        update_result = supabase_client.table('user_mfa_settings').update({
             'mfa_enabled': True,
             'phone_verified': True,
             'enrollment_completed_at': datetime.now(timezone.utc).isoformat(),
             'updated_at': datetime.now(timezone.utc).isoformat()
         }).eq('user_id', user_id).execute()
+        print(f"[MFA Verify Enrollment] Update result: {update_result}")
+        print(f"[MFA Verify Enrollment] Update data: {update_result.data}")
         
-        return JSONResponse(content={
+        # Include session data if available
+        response_content = {
             "success": True,
             "message": "MFA enrollment completed successfully"
-        })
+        }
+        
+        # Add session data if it exists in the auth response
+        if hasattr(auth_response, 'data') and auth_response.data:
+            if 'access_token' in auth_response.data:
+                response_content['session'] = {
+                    'access_token': auth_response.data.get('access_token'),
+                    'refresh_token': auth_response.data.get('refresh_token'),
+                    'expires_at': auth_response.data.get('expires_at'),
+                    'expires_in': auth_response.data.get('expires_in')
+                }
+        
+        return JSONResponse(content=response_content)
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -400,26 +436,31 @@ async def create_mfa_challenge(
             print(f"[MFA Challenge] MFA not enabled for user {user_id}")
             return JSONResponse(content={"mfa_required": False})
         
-        # Get user's enrolled factors using session-aware client
-        session_client = get_session_aware_supabase_client(request)
-        factors_response = session_client.auth.mfa.list_factors()
-        print(f"[MFA Challenge] Factors response: {factors_response}")
+        # Get user's enrolled factors using direct API call
+        access_token = request.headers.get("Authorization").split(" ", 1)[1]
+        import httpx
         
-        # Handle the response structure - it has 'all', 'totp', and 'phone' attributes
-        if hasattr(factors_response, 'all'):
-            all_factors = factors_response.all
-            phone_factors = factors_response.phone if hasattr(factors_response, 'phone') else []
-        elif hasattr(factors_response, 'data'):
-            # If data is a dict with 'all' key
-            if isinstance(factors_response.data, dict) and 'all' in factors_response.data:
-                all_factors = factors_response.data.get('all', [])
-                phone_factors = factors_response.data.get('phone', [])
-            else:
-                all_factors = factors_response.data if factors_response.data else []
-                phone_factors = []
-        else:
-            all_factors = []
-            phone_factors = []
+        factors_response = httpx.get(
+            f"{os.getenv('SUPABASE_URL')}/auth/v1/user",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "apikey": os.getenv("SUPABASE_ANON_KEY")
+            }
+        )
+        
+        print(f"[MFA Challenge] User API response: {factors_response.status_code}")
+        
+        if factors_response.status_code != 200:
+            print(f"[MFA Challenge] Failed to get user factors: {factors_response.text}")
+            raise HTTPException(status_code=500, detail="Failed to retrieve MFA factors")
+            
+        user_data = factors_response.json()
+        user_factors = user_data.get('factors', [])
+        print(f"[MFA Challenge] User factors from API: {user_factors}")
+        
+        # Process the factors from the API response
+        all_factors = user_factors
+        phone_factors = [f for f in user_factors if f.get('factor_type') == 'phone']
         
         print(f"[MFA Challenge] All factors: {all_factors}")
         print(f"[MFA Challenge] Phone factors: {phone_factors}")
@@ -485,15 +526,24 @@ async def create_mfa_challenge(
             else:
                 raise HTTPException(status_code=400, detail="Phone MFA not enrolled")
         
-        # Create challenge (sends SMS) using session-aware client
+        # Create challenge (sends SMS) using direct API call
         try:
             factor_id = phone_factor.get('id') if isinstance(phone_factor, dict) else getattr(phone_factor, 'id')
-            challenge_response = session_client.auth.mfa.challenge({
-                'factor_id': factor_id
-            })
             
-            if hasattr(challenge_response, 'error') and challenge_response.error:
-                raise Exception(f"Challenge creation failed: {challenge_response.error}")
+            challenge_response = httpx.post(
+                f"{os.getenv('SUPABASE_URL')}/auth/v1/factors/{factor_id}/challenge",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "apikey": os.getenv("SUPABASE_ANON_KEY"),
+                    "Content-Type": "application/json"
+                },
+                json={}
+            )
+            
+            print(f"[MFA Challenge] Challenge API response: {challenge_response.status_code}")
+            
+            if challenge_response.status_code != 200:
+                raise Exception(f"Challenge creation failed: {challenge_response.text}")
                 
         except Exception as challenge_error:
             print(f"[MFA Challenge] Challenge creation failed: {challenge_error}")
@@ -507,13 +557,10 @@ async def create_mfa_challenge(
                 print(f"[MFA Challenge] Using mock challenge for test phone")
                 # Create a mock challenge response
                 factor_id = phone_factor.get('id') if isinstance(phone_factor, dict) else getattr(phone_factor, 'id')
-                challenge_response = type('MockResponse', (), {
-                    'data': {
-                        'id': 'test_challenge_' + factor_id[:8],
-                        'type': 'phone'
-                    },
-                    'error': None
-                })()
+                challenge_data = {
+                    'id': 'test_challenge_' + factor_id[:8],
+                    'type': 'phone'
+                }
             else:
                 raise HTTPException(status_code=400, detail=str(challenge_error))
         
@@ -528,15 +575,13 @@ async def create_mfa_challenge(
         # Get phone number from user settings since factor doesn't include it
         phone_number = result.data.get('phone_number', '') if result.data else ''
         
-        # Extract challenge_id properly
-        challenge_id = None
-        if hasattr(challenge_response, 'data') and challenge_response.data:
-            if isinstance(challenge_response.data, dict):
-                challenge_id = challenge_response.data.get('id')
-            else:
-                challenge_id = getattr(challenge_response.data, 'id', None)
-        elif isinstance(challenge_response, dict):
-            challenge_id = challenge_response.get('id')
+        # Extract challenge_id from the response
+        if challenge_response.status_code == 200:
+            challenge_data = challenge_response.json()
+            challenge_id = challenge_data.get('id')
+        else:
+            # For test phone, we already have challenge_data
+            challenge_id = challenge_data.get('id') if 'challenge_data' in locals() else None
         
         print(f"[MFA Challenge] Final response - challenge_id: {challenge_id}, phone_number: {phone_number}, phone_masked: {phone_number[-4:] if phone_number else 'N/A'}")
         

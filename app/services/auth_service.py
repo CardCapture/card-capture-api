@@ -1,5 +1,5 @@
 from fastapi import Request, HTTPException
-from app.core.clients import supabase_auth, supabase_client
+from app.core.clients import get_supabase_auth, get_supabase_client
 import os
 from jose import jwt, JWTError
 from app.repositories.auth_repository import (
@@ -16,7 +16,7 @@ from app.utils.retry_utils import log_debug
 async def login_service(credentials: dict):
     try:
         log_debug("Login attempt for:", credentials.get("email"), service="auth")
-        response = login_db(supabase_auth, credentials)
+        response = login_db(get_supabase_auth(), credentials)
         log_debug("Login successful", service="auth")
         return response
     except Exception as e:
@@ -33,7 +33,7 @@ async def read_current_user_service(request: Request):
         token = auth_header.split(" ")[1]
         
         # Get user from token
-        user_response = supabase_client.auth.get_user(token)
+        user_response = get_supabase_client().auth.get_user(token)
         if not user_response.user:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
         
@@ -43,7 +43,7 @@ async def read_current_user_service(request: Request):
             raise HTTPException(status_code=401, detail="User ID not found in token")
         
         log_debug(f"Fetching user profile for user_id: {user_id}", service="auth")
-        profile_response = supabase_client.table("users").select("*").eq("id", user_id).execute()
+        profile_response = get_supabase_client().table("users").select("*").eq("id", user_id).execute()
         log_debug(f"User profile fetched for user_id: {user_id}", service="auth")
         
         return profile_response.data[0] if profile_response.data else None
@@ -62,7 +62,7 @@ async def reset_password_service(payload: dict):
             raise HTTPException(status_code=400, detail="Email is required")
         
         log_debug(f"Password reset request for: {email}", service="auth")
-        response = reset_password_db(supabase_client, email)
+        response = reset_password_db(get_supabase_client(), email)
         log_debug(f"Password reset email sent to: {email}", service="auth")
         return {"message": "Password reset email sent successfully"}
     except HTTPException:
@@ -76,7 +76,7 @@ async def validate_magic_link_service(token: str):
     try:
         log_debug(f"Validating magic link token: {token[:8]}...", service="auth")
         
-        magic_link = validate_magic_link_db(supabase_client, token)
+        magic_link = validate_magic_link_db(get_supabase_client(), token)
         
         if not magic_link:
             raise HTTPException(status_code=400, detail="Invalid or expired magic link")
@@ -96,7 +96,7 @@ async def consume_magic_link_service(token: str, link_type: str):
         log_debug(f"Processing magic link: {token[:8]}... (type: {link_type})", service="auth")
         
         # First validate the magic link
-        magic_link = validate_magic_link_db(supabase_client, token)
+        magic_link = validate_magic_link_db(get_supabase_client(), token)
         
         if not magic_link:
             raise HTTPException(status_code=400, detail="Invalid or expired magic link")
@@ -112,7 +112,7 @@ async def consume_magic_link_service(token: str, link_type: str):
             # For password reset, create a temporary session using Supabase admin
             try:
                 # Generate a temporary access token using admin API
-                session_response = supabase_client.auth.admin.generate_link({
+                session_response = get_supabase_client().auth.admin.generate_link({
                     "type": "recovery",
                     "email": email
                 })
@@ -122,7 +122,7 @@ async def consume_magic_link_service(token: str, link_type: str):
                     raise HTTPException(status_code=500, detail="Failed to create reset session")
                 
                 # Mark magic link as consumed
-                consume_magic_link_db(supabase_client, token)
+                consume_magic_link_db(get_supabase_client(), token)
                 
                 log_debug(f"Password reset session created for: {email}", service="auth")
                 return {
@@ -141,7 +141,7 @@ async def consume_magic_link_service(token: str, link_type: str):
             except Exception as session_error:
                 log_debug(f"Error creating password reset session: {str(session_error)}", service="auth")
                 # Fallback - mark as consumed and let frontend handle without session
-                consume_magic_link_db(supabase_client, token)
+                consume_magic_link_db(get_supabase_client(), token)
                 
                 return {
                     "type": "password_reset",
@@ -156,7 +156,7 @@ async def consume_magic_link_service(token: str, link_type: str):
             log_debug(f"Processing invite magic link for: {email}", service="auth")
             
             # Mark magic link as consumed
-            consume_magic_link_db(supabase_client, token)
+            consume_magic_link_db(get_supabase_client(), token)
             
             log_debug(f"Invite magic link processed for: {email}", service="auth")
             return {
@@ -194,7 +194,7 @@ async def create_user_service(payload: dict):
         # Check if user already exists
         existing_user = None
         try:
-            auth_users = supabase_client.auth.admin.list_users()
+            auth_users = get_supabase_client().auth.admin.list_users()
             for user in auth_users:
                 if user.email == email:
                     existing_user = user
@@ -208,7 +208,7 @@ async def create_user_service(payload: dict):
             # User exists - update their password and info
             log_debug(f"User {email} already exists, updating password and profile", service="auth")
             try:
-                update_response = supabase_client.auth.admin.update_user_by_id(
+                update_response = get_supabase_client().auth.admin.update_user_by_id(
                     existing_user.id,
                     {
                         "password": password,
@@ -226,7 +226,7 @@ async def create_user_service(payload: dict):
             # User doesn't exist - create new user
             log_debug(f"Creating new user: {email}", service="auth")
             try:
-                create_response = supabase_client.auth.admin.create_user({
+                create_response = get_supabase_client().auth.admin.create_user({
                     "email": email,
                     "password": password,
                     "email_confirm": True  # Auto-confirm since they came from magic link
@@ -245,7 +245,7 @@ async def create_user_service(payload: dict):
                     log_debug("User was created by another process, trying to find them", service="auth")
                     # Try to find the user that was just created
                     try:
-                        auth_users = supabase_client.auth.admin.list_users()
+                        auth_users = get_supabase_client().auth.admin.list_users()
                         for user in auth_users:
                             if user.email == email:
                                 user_id = user.id
@@ -268,7 +268,7 @@ async def create_user_service(payload: dict):
                 "school_id": school_id
             }
             
-            supabase_client.table("profiles").upsert(profile_data).execute()
+            get_supabase_client().table("profiles").upsert(profile_data).execute()
             log_debug(f"Profile created/updated for: {email}", service="auth")
         except Exception as profile_error:
             log_debug(f"Profile creation error (non-fatal): {str(profile_error)}", service="auth")
