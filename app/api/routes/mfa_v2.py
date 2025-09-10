@@ -296,6 +296,8 @@ async def verify_enrollment(
     factor_id: str = Body(...),
     challenge_id: str = Body(...),
     code: str = Body(...),
+    remember_device: bool = Body(default=True),  # Default to true for enrollment
+    device_name: str = Body(default="Device"),
     current_user: dict = Depends(get_current_user)
 ) -> JSONResponse:
     """Verify MFA enrollment"""
@@ -308,20 +310,106 @@ async def verify_enrollment(
         # Verify the challenge
         verify_result = await MFAService.verify_challenge(token, factor_id, challenge_id, code)
         
-        # Update database to mark MFA as enabled
+        # Update database to mark MFA as enabled (use upsert to handle missing rows)
         print(f"[MFA Verify] Updating database for user {user_id}")
-        get_supabase_client().table('user_mfa_settings').update({
+        
+        # Get the phone number from the MFA factor or from the request
+        # First try to get existing settings
+        existing_settings = get_supabase_client().table('user_mfa_settings') \
+            .select('*') \
+            .eq('user_id', user_id) \
+            .execute()
+        
+        phone_number = existing_settings.data[0]['phone_number'] if existing_settings.data else None
+        
+        get_supabase_client().table('user_mfa_settings').upsert({
+            'user_id': user_id,
+            'phone_number': phone_number,
             'mfa_enabled': True,
             'phone_verified': True,
             'enrollment_completed_at': datetime.now(timezone.utc).isoformat(),
             'updated_at': datetime.now(timezone.utc).isoformat()
-        }).eq('user_id', user_id).execute()
+        }).execute()
         
         # Return the new session if provided
         response_data = {
             "success": True,
             "message": "MFA enrollment completed successfully"
         }
+        
+        # Handle remember device with smart token generation (after successful enrollment)
+        if remember_device:
+            # Check if current device already has a valid token
+            current_device_token = request.headers.get('X-Device-Token')
+            device_token_to_use = None
+            
+            if current_device_token:
+                # Check if current token exists and is not expired
+                existing_token_hash = hashlib.sha256(current_device_token.encode()).hexdigest()
+                existing_device = get_supabase_client().table('trusted_devices') \
+                    .select('*') \
+                    .eq('user_id', user_id) \
+                    .eq('device_token_hash', existing_token_hash) \
+                    .gte('expires_at', datetime.now(timezone.utc).isoformat()) \
+                    .execute()
+                
+                if existing_device.data:
+                    # Current token is valid, extend its expiry instead of generating new token
+                    new_expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+                    get_supabase_client().table('trusted_devices') \
+                        .update({
+                            'expires_at': new_expires_at.isoformat(),
+                            'updated_at': datetime.now(timezone.utc).isoformat(),
+                            'device_name': device_name  # Update device name if needed
+                        }) \
+                        .eq('id', existing_device.data[0]['id']) \
+                        .execute()
+                    
+                    device_token_to_use = current_device_token
+                    expires_at = new_expires_at
+                    print(f"[MFA Verify Enrollment] Extended existing device token expiry for 30 days")
+                else:
+                    print(f"[MFA Verify Enrollment] Current device token not found or expired, generating new one")
+                    # Current token is expired/invalid, generate new token
+                    device_token_to_use, token_hash = generate_device_token()
+                    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+                    
+                    # Store new device token in database
+                    try:
+                        get_supabase_client().table('trusted_devices').insert({
+                            'user_id': user_id,
+                            'device_token_hash': token_hash,
+                            'device_name': device_name,
+                            'expires_at': expires_at.isoformat()
+                        }).execute()
+                        print(f"[MFA Verify Enrollment] New device token generated for 30-day trust")
+                    except Exception as device_error:
+                        print(f"[MFA Verify Enrollment] Error saving new device token: {device_error}")
+                        # Don't fail enrollment if device trust fails
+                        device_token_to_use = None
+            else:
+                # No current device token, generate new one
+                device_token_to_use, token_hash = generate_device_token()
+                expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+                
+                # Store device token in database
+                try:
+                    get_supabase_client().table('trusted_devices').insert({
+                        'user_id': user_id,
+                        'device_token_hash': token_hash,
+                        'device_name': device_name,
+                        'expires_at': expires_at.isoformat()
+                    }).execute()
+                    print(f"[MFA Verify Enrollment] New device token generated for 30-day trust")
+                except Exception as device_error:
+                    print(f"[MFA Verify Enrollment] Error saving device token: {device_error}")
+                    # Don't fail enrollment if device trust fails
+                    device_token_to_use = None
+            
+            # Add device token to response if successfully generated/extended
+            if device_token_to_use:
+                response_data['device_token'] = device_token_to_use
+                response_data['device_expires_at'] = expires_at.isoformat()
         
         if 'access_token' in verify_result:
             response_data['session'] = {
@@ -438,40 +526,79 @@ async def verify_mfa(
                 'expires_in': verify_result.get('expires_in')
             }
         
-        # Handle remember device with proper token generation
+        # Handle remember device with smart token generation
         if remember_device:
-            token, token_hash = generate_device_token()
+            # Check if current device already has a valid token
+            current_device_token = request.headers.get('X-Device-Token')
+            device_token_to_use = None
             expires_at = datetime.now(timezone.utc) + timedelta(days=30)
             
-            # Store device token in database
-            try:
-                # Check if user has existing trusted devices table entry
-                existing = get_supabase_client().table('trusted_devices').select('*') \
+            if current_device_token:
+                print(f"[MFA Verify] Checking if current device token is valid")
+                current_token_hash = hash_token(current_device_token)
+                
+                # Check if current token exists and is not expired
+                existing_device = get_supabase_client().table('trusted_devices') \
+                    .select('*') \
                     .eq('user_id', user_id) \
+                    .eq('device_token_hash', current_token_hash) \
                     .execute()
                 
-                if existing.data:
-                    # Update existing device token
-                    get_supabase_client().table('trusted_devices').update({
-                        'device_token_hash': token_hash,
-                        'expires_at': expires_at.isoformat(),
-                        'updated_at': datetime.now(timezone.utc).isoformat()
-                    }).eq('user_id', user_id).execute()
-                else:
-                    # Insert new device token
-                    get_supabase_client().table('trusted_devices').insert({
-                        'user_id': user_id,
-                        'device_token_hash': token_hash,
-                        'expires_at': expires_at.isoformat(),
-                        'created_at': datetime.now(timezone.utc).isoformat()
-                    }).execute()
+                if existing_device.data:
+                    device = existing_device.data[0]
+                    try:
+                        device_expires_at = datetime.fromisoformat(device['expires_at'].replace('Z', '+00:00'))
+                        if device_expires_at > datetime.now(timezone.utc):
+                            # Current token is still valid, just extend its expiry
+                            print(f"[MFA Verify] Current device token is valid, extending expiry")
+                            device_token_to_use = current_device_token
+                            
+                            # Update expiry date
+                            get_supabase_client().table('trusted_devices').update({
+                                'expires_at': expires_at.isoformat(),
+                                'updated_at': datetime.now(timezone.utc).isoformat()
+                            }).eq('user_id', user_id).eq('device_token_hash', current_token_hash).execute()
+                        else:
+                            print(f"[MFA Verify] Current device token expired, generating new one")
+                    except Exception as date_error:
+                        print(f"[MFA Verify] Error parsing device expiry: {date_error}")
+            
+            # If no valid existing token, generate a new one
+            if device_token_to_use is None:
+                print(f"[MFA Verify] Generating new device token")
+                device_token_to_use, token_hash = generate_device_token()
                 
-                response_data['device_token'] = token
+                try:
+                    # Check if user has any existing trusted devices
+                    existing = get_supabase_client().table('trusted_devices').select('*') \
+                        .eq('user_id', user_id) \
+                        .execute()
+                    
+                    if existing.data:
+                        # Update the first existing device record (maintain single device per user for now)
+                        get_supabase_client().table('trusted_devices').update({
+                            'device_token_hash': token_hash,
+                            'expires_at': expires_at.isoformat(),
+                            'updated_at': datetime.now(timezone.utc).isoformat()
+                        }).eq('user_id', user_id).execute()
+                    else:
+                        # Insert new device token
+                        get_supabase_client().table('trusted_devices').insert({
+                            'user_id': user_id,
+                            'device_token_hash': token_hash,
+                            'expires_at': expires_at.isoformat(),
+                            'created_at': datetime.now(timezone.utc).isoformat()
+                        }).execute()
+                        
+                except Exception as e:
+                    print(f"[MFA Verify] Failed to store new device token: {e}")
+                    # Continue without device trust if storage fails
+                    device_token_to_use = None
+            
+            if device_token_to_use:
+                response_data['device_token'] = device_token_to_use
                 response_data['device_expires_at'] = expires_at.isoformat()
-                print(f"[MFA Verify] Device token generated for user {user_id}")
-            except Exception as e:
-                print(f"[MFA Verify] Failed to store device token: {e}")
-                # Continue without device trust if storage fails
+                print(f"[MFA Verify] Device token provided for user {user_id}")
         
         return JSONResponse(content=response_data)
         
@@ -492,10 +619,24 @@ async def check_device_trust(
     try:
         user_id = current_user['id']
         
+        print(f"[Device Trust] Checking device trust for user {user_id}")
+        print(f"[Device Trust] Device token: {device_token[:8]}...")
+        
         if not device_token:
+            print(f"[Device Trust] No device token provided")
             return JSONResponse(content={"trusted": False})
         
         token_hash = hash_token(device_token)
+        print(f"[Device Trust] Token hash: {token_hash[:16]}...")
+        
+        # First check all devices for this user (debugging)
+        all_devices = get_supabase_client().table('trusted_devices') \
+            .select('*') \
+            .eq('user_id', user_id) \
+            .execute()
+        print(f"[Device Trust] Found {len(all_devices.data)} total devices for user")
+        for device in all_devices.data:
+            print(f"[Device Trust] Device: hash={device['device_token_hash'][:16]}... expires={device['expires_at']}")
         
         # Check trusted devices
         result = get_supabase_client().table('trusted_devices') \
@@ -504,7 +645,10 @@ async def check_device_trust(
             .eq('device_token_hash', token_hash) \
             .execute()
         
+        print(f"[Device Trust] Query result: {len(result.data)} matching devices")
+        
         if not result.data:
+            print(f"[Device Trust] No matching device found")
             return JSONResponse(content={"trusted": False})
         
         device = result.data[0]
