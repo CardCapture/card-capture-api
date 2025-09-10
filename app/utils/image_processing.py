@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image, ExifTags, ImageOps
 from google.cloud import documentai_v1 as documentai
 from app.config import PROJECT_ID, DOCAI_LOCATION, DOCAI_PROCESSOR_ID, TRIMMED_FOLDER
+from scipy import ndimage
 
 def trim_image_with_docai(input_path: str, output_path: str = None, percent_expand: float = 0.5) -> str:
     """
@@ -66,44 +67,119 @@ def trim_image_with_docai(input_path: str, output_path: str = None, percent_expa
         print(f"[DocAI] Error in trim_image_with_docai: {e}")
         return input_path
 
-def detect_card_boundaries(image_path: str, padding: int = 20) -> tuple:
+def detect_card_boundaries(image_path: str, padding: int = 20, white_threshold: int = 245, use_color_detection: bool = True) -> tuple:
     """
-    Detect the actual card boundaries by finding non-white content areas.
-    This works universally for any card format as it detects content vs background.
+    Detect the actual card boundaries by finding the card vs background.
+    Enhanced algorithm that can distinguish white cards from light backgrounds.
     
     Args:
         image_path: Path to the image file
         padding: Additional padding to add around detected content (default: 20 pixels)
+        white_threshold: Threshold for white detection (0-255, default: 245)
+                        Lower values = more aggressive white detection
+                        Higher values = more conservative (better for white-on-white cards)
+        use_color_detection: Use color-based detection for better card vs background distinction
         
     Returns:
         Tuple of (left, top, right, bottom) coordinates or None if detection fails
     """
     try:
-        # Convert image to grayscale for content detection
-        img = Image.open(image_path).convert('L')
-        img_array = np.array(img)
+        # Open image and apply EXIF orientation first
+        img = Image.open(image_path)
+        img = ImageOps.exif_transpose(img)
         
-        # Find non-white areas (content areas vs background)
-        # Use threshold to identify areas that aren't pure white/near-white
-        non_white = img_array < 240  # Adjust threshold as needed
+        if use_color_detection:
+            # Use color information to better distinguish card from background
+            img_array = np.array(img)
+            
+            # Calculate variance in each color channel to find uniform areas (likely card)
+            if len(img_array.shape) == 3:  # Color image
+                # Calculate standard deviation across color channels for each pixel
+                color_std = np.std(img_array, axis=2)
+                
+                # Also check for very bright areas (potential card areas)
+                brightness = np.mean(img_array, axis=2)
+                
+                # Simple approach: look for areas that are NOT background
+                # Background is typically much darker than card areas
+                
+                # Card areas are generally brighter than background
+                not_background = brightness > (white_threshold - 40)
+                
+                # Allow significant color variation for printed cards
+                allow_variation = color_std < 50
+                
+                # Combine: bright enough to be card content
+                potential_card = not_background | (brightness > 240)  # Very bright areas are definitely card
+                
+                # Simple cleanup - just remove very small isolated pixels
+                structure = np.ones((3, 3))
+                potential_card = ndimage.binary_opening(potential_card, structure=structure)
+                
+                # Find the largest connected component (likely the main card)
+                labeled_array, num_features = ndimage.label(potential_card)
+                
+                if num_features > 0:
+                    # Find components and their sizes
+                    component_sizes = [(labeled_array == i).sum() for i in range(1, num_features + 1)]
+                    
+                    # Filter out very small components (likely noise)
+                    min_card_size = img.width * img.height * 0.1  # At least 10% of image
+                    valid_components = []
+                    
+                    for i, size in enumerate(component_sizes):
+                        if size > min_card_size:
+                            valid_components.append((i + 1, size))
+                    
+                    if valid_components:
+                        # Use the largest valid component
+                        largest_component = max(valid_components, key=lambda x: x[1])[0]
+                        card_mask = labeled_array == largest_component
+                    else:
+                        # No valid large components found, fall back to original method
+                        print("[CardBoundary] No large enough components found, using fallback")
+                        card_mask = potential_card
+                else:
+                    card_mask = potential_card
+            else:
+                # Fallback to grayscale method
+                img_array = np.array(img.convert('L'))
+                card_mask = img_array > white_threshold
+        else:
+            # Original grayscale method
+            img_array = np.array(img.convert('L'))
+            card_mask = img_array < white_threshold
         
-        # Find the bounding box of all non-white content
-        rows = np.any(non_white, axis=1)
-        cols = np.any(non_white, axis=0)
+        print(f"[CardBoundary] Using white threshold: {white_threshold}, color detection: {use_color_detection}")
+        
+        # Find the bounding box of the card
+        rows = np.any(card_mask, axis=1)
+        cols = np.any(card_mask, axis=0)
         
         if not np.any(rows) or not np.any(cols):
-            print("[CardBoundary] No content detected - image might be blank or all white")
-            return None
+            print("[CardBoundary] No card detected - trying fallback method")
+            # Fallback to original method with lower threshold
+            img_gray = np.array(img.convert('L'))
+            non_white = img_gray < (white_threshold - 50)  # More aggressive
+            rows = np.any(non_white, axis=1)
+            cols = np.any(non_white, axis=0)
+            
+            if not np.any(rows) or not np.any(cols):
+                print("[CardBoundary] Fallback also failed - no content detected")
+                return None
             
         # Get the first and last rows/columns with content
         top, bottom = np.where(rows)[0][[0, -1]]
         left, right = np.where(cols)[0][[0, -1]]
         
-        # Add padding to ensure we don't clip content at edges
-        left = max(0, left - padding)
-        top = max(0, top - padding)
-        right = min(img.width, right + padding)
-        bottom = min(img.height, bottom + padding)
+        # Add conservative padding to ensure we don't clip any content
+        # Use larger padding values for safety
+        safe_padding = max(padding, 40)  # At least 40 pixels padding
+        
+        left = max(0, left - safe_padding)
+        top = max(0, top - safe_padding)
+        right = min(img.width, right + safe_padding)
+        bottom = min(img.height, bottom + safe_padding)
         
         print(f"[CardBoundary] Detected card boundaries: ({left}, {top}) to ({right}, {bottom})")
         print(f"[CardBoundary] Card size: {right - left} x {bottom - top}")
@@ -114,39 +190,52 @@ def detect_card_boundaries(image_path: str, padding: int = 20) -> tuple:
         print(f"[CardBoundary] Error in boundary detection: {e}")
         return None
 
-def trim_image_with_boundary_detection(input_path: str, output_path: str = None) -> str:
+def trim_image_with_boundary_detection(input_path: str, output_path: str = None, white_threshold: int = 245, apply_orientation: bool = True) -> str:
     """
     Trim image using card boundary detection - finds actual content boundaries.
-    This is more accurate than field-based detection as it captures the entire card.
+    Now includes proper orientation handling and enhanced detection.
     
     Args:
         input_path: Path to input image
         output_path: Path for output image (auto-generated if None)
+        white_threshold: Threshold for white detection (245 = conservative for white cards)
+        apply_orientation: Whether to apply EXIF orientation correction first
         
     Returns:
         Path to trimmed image, or input_path if trimming fails
     """
     try:
+        # Apply orientation correction first if requested
+        working_path = input_path
+        if apply_orientation:
+            working_path = ensure_proper_orientation(input_path)
+        
         # Set up output path
         if not output_path:
             filename = os.path.basename(input_path)
             name, ext = os.path.splitext(filename)
             output_path = os.path.join(TRIMMED_FOLDER, f"{name}_trimmed{ext}")
         
-        # Detect card boundaries
-        boundaries = detect_card_boundaries(input_path)
+        # Try enhanced color-based detection first
+        boundaries = detect_card_boundaries(working_path, white_threshold=white_threshold, use_color_detection=True)
+        
+        # If that fails, try traditional grayscale method with more aggressive threshold
         if not boundaries:
-            print("[CardBoundary] Boundary detection failed - returning original image")
+            print("[CardBoundary] Color detection failed, trying grayscale method...")
+            boundaries = detect_card_boundaries(working_path, white_threshold=white_threshold-30, use_color_detection=False)
+        
+        if not boundaries:
+            print("[CardBoundary] All boundary detection methods failed - returning original image")
             return input_path
         
         # Crop image to detected boundaries
-        img = Image.open(input_path)
+        img = Image.open(working_path)
         left, top, right, bottom = boundaries
         cropped_img = img.crop((left, top, right, bottom))
         
         # Ensure output directory exists and save
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        cropped_img.save(output_path)
+        cropped_img.save(output_path, format='JPEG', quality=100, optimize=True)
         
         print(f"[CardBoundary] Cropped image saved to {output_path}")
         return output_path
@@ -194,18 +283,24 @@ def ensure_trimmed_image(original_image_path: str) -> str:
         processed_path = ensure_proper_orientation(original_image_path)
         
         # Try card boundary detection first (universal method for all card formats)
-        print(f"🎯 Attempting card boundary detection...")
-        trimmed_path = trim_image_with_boundary_detection(processed_path)
+        # Use conservative threshold (245) for white-on-white cards
+        print(f"🎯 Attempting card boundary detection with conservative white threshold...")
+        trimmed_path = trim_image_with_boundary_detection(processed_path, white_threshold=250)
         
-        # If boundary detection returns the original path, it failed - try DocAI fallback
+        # If boundary detection returns the original path, it failed - try more conservative threshold
         if trimmed_path == processed_path:
-            print(f"⚠️ Card boundary detection failed, falling back to DocAI field detection...")
-            trimmed_path = trim_image_with_docai(processed_path, percent_expand=0.80)  # Higher expansion for better coverage
+            print(f"⚠️ Initial boundary detection failed, trying ultra-conservative threshold...")
+            trimmed_path = trim_image_with_boundary_detection(processed_path, white_threshold=252)
             
-            # If DocAI also fails, return original
+            # If still failing, fall back to DocAI field detection
             if trimmed_path == processed_path:
-                print(f"⚠️ Both trimming methods failed, returning original image")
-                return original_image_path
+                print(f"⚠️ Boundary detection failed, falling back to DocAI field detection...")
+                trimmed_path = trim_image_with_docai(processed_path, percent_expand=0.80)  # Higher expansion for better coverage
+                
+                # If DocAI also fails, return original
+                if trimmed_path == processed_path:
+                    print(f"⚠️ All trimming methods failed, returning original image")
+                    return original_image_path
         
         # Verify the trimmed file exists
         if not os.path.exists(trimmed_path):
