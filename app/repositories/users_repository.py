@@ -49,7 +49,7 @@ def invite_user_db(email: str, first_name: str, last_name: str, role: List[str],
         # Send magic link email for invite
         supabase_client = get_supabase_client()
         magic_link_response = send_magic_link_email_db(
-            supabase_client, 
+            get_supabase_client(), 
             email, 
             "invite", 
             user_metadata
@@ -59,7 +59,7 @@ def invite_user_db(email: str, first_name: str, last_name: str, role: List[str],
             raise Exception("Failed to send magic link invite email")
         
         # Check if user already exists in Supabase auth
-        user_response = supabase_client.auth.admin.list_users()
+        user_response = get_supabase_client().auth.admin.list_users()
         existing_user = None
         
         for u in user_response:
@@ -88,7 +88,7 @@ def invite_user_db(email: str, first_name: str, last_name: str, role: List[str],
             print(f"🔄 Updating existing user profile for {existing_user.id}")
             
             # Update app_metadata
-            supabase_client.auth.admin.update_user_by_id(
+            get_supabase_client().auth.admin.update_user_by_id(
                 existing_user.id,
                 {
                     "app_metadata": {
@@ -108,7 +108,7 @@ def invite_user_db(email: str, first_name: str, last_name: str, role: List[str],
             }
             
             # Use upsert to handle potential conflicts
-            supabase_client.table("profiles").upsert(profile_data).execute()
+            get_supabase_client().table("profiles").upsert(profile_data).execute()
             print(f"✅ User profile updated successfully")
             
             # Format the return value properly

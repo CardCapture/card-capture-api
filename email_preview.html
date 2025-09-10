@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Preview - Complete your CardCapture registration</title>
+    <style>
+        /* Reset and base styles */
+        body, table, td, p, a, li, blockquote {
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+        }
+        
+        table, td {
+            mso-table-lspace: 0pt;
+            mso-table-rspace: 0pt;
+        }
+        
+        img {
+            -ms-interpolation-mode: bicubic;
+            border: 0;
+            height: auto;
+            line-height: 100%;
+            outline: none;
+            text-decoration: none;
+        }
+        
+        /* Modern gradient background matching the website */
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #dbeafe 0%, #ffffff 50%, #f3e8ff 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        
+        .outer-container {
+            padding: 40px 20px;
+        }
+        
+        /* Header with gradient matching the web design */
+        .header {
+            background: linear-gradient(135deg, #dbeafe 0%, #ffffff 50%, #f3e8ff 100%);
+            padding: 48px 32px 32px 32px;
+            text-align: center;
+            position: relative;
+        }
+        
+        /* Decorative blurred circles matching web design */
+        .header::before {
+            content: '';
+            position: absolute;
+            top: -50px;
+            right: 10%;
+            width: 120px;
+            height: 120px;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 50%;
+            filter: blur(40px);
+        }
+        
+        .header::after {
+            content: '';
+            position: absolute;
+            bottom: -30px;
+            left: 20%;
+            width: 100px;
+            height: 100px;
+            background: rgba(147, 51, 234, 0.1);
+            border-radius: 50%;
+            filter: blur(35px);
+        }
+        
+        .logo-container {
+            position: relative;
+            z-index: 2;
+        }
+        
+        .header img {
+            max-width: 80px;
+            height: auto;
+            margin-bottom: 12px;
+        }
+        
+        .logo-text {
+            color: #1e293b;
+            font-size: 28px;
+            font-weight: 700;
+            margin: 0;
+            letter-spacing: -0.5px;
+        }
+        
+        /* Content styling matching web pages */
+        .content {
+            padding: 32px 32px 48px 32px;
+            position: relative;
+        }
+        
+        /* Gen Z friendly badge */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            background: rgba(59, 130, 246, 0.1);
+            color: #3b82f6;
+            padding: 8px 16px;
+            border-radius: 50px;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 24px;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #3b82f6;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .main-title {
+            font-size: 48px;
+            font-weight: 700;
+            color: #1e293b;
+            margin: 0 0 16px 0;
+            text-align: center;
+            line-height: 1.1;
+            letter-spacing: -1px;
+        }
+        
+        .main-title .highlight {
+            color: #3b82f6;
+        }
+        
+        .subtitle {
+            font-size: 20px;
+            color: rgba(71, 85, 105, 0.8);
+            margin: 0 0 32px 0;
+            text-align: center;
+            line-height: 1.5;
+            max-width: 480px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        /* Modern CTA button matching web design */
+        .cta-container {
+            text-align: center;
+            margin: 48px 0;
+        }
+        
+        .cta-button {
+            display: inline-block;
+            background: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 20px 40px;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 18px;
+            box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.4);
+            transition: all 0.2s ease;
+            letter-spacing: -0.25px;
+        }
+        
+        .cta-button:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+            box-shadow: 0 20px 25px -5px rgba(59, 130, 246, 0.5);
+        }
+        
+        /* Benefits section matching web design */
+        .benefits {
+            margin: 40px 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            justify-content: center;
+        }
+        
+        .benefit-item {
+            flex: 1;
+            min-width: 140px;
+            text-align: center;
+            padding: 24px 16px;
+            background: rgba(248, 250, 252, 0.8);
+            border-radius: 12px;
+            border: 1px solid rgba(226, 232, 240, 0.5);
+        }
+        
+        .benefit-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px auto;
+            color: #3b82f6;
+        }
+        
+        .benefit-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1e293b;
+            margin: 0 0 8px 0;
+        }
+        
+        .benefit-text {
+            font-size: 14px;
+            color: rgba(71, 85, 105, 0.7);
+            margin: 0;
+            line-height: 1.4;
+        }
+        
+        .security-notice {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 32px 0;
+            text-align: center;
+        }
+        
+        .security-notice-text {
+            font-size: 14px;
+            color: rgba(71, 85, 105, 0.8);
+            margin: 0;
+        }
+        
+        .expiry-notice {
+            font-size: 14px;
+            color: rgba(71, 85, 105, 0.6);
+            text-align: center;
+            margin: 24px 0 0 0;
+        }
+        
+        /* Footer matching web design */
+        .footer {
+            background: rgba(248, 250, 252, 0.5);
+            padding: 32px;
+            text-align: center;
+            border-top: 1px solid rgba(226, 232, 240, 0.5);
+        }
+        
+        .footer-text {
+            font-size: 12px;
+            color: rgba(71, 85, 105, 0.6);
+            margin: 0 0 8px 0;
+            line-height: 1.4;
+        }
+        
+        .footer-link {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        
+        .footer-link:hover {
+            text-decoration: underline;
+        }
+        
+        /* Mobile responsive */
+        @media screen and (max-width: 600px) {
+            .outer-container {
+                padding: 20px 12px;
+            }
+            
+            .email-container {
+                border-radius: 12px;
+            }
+            
+            .content, .header, .footer {
+                padding-left: 20px !important;
+                padding-right: 20px !important;
+            }
+            
+            .main-title {
+                font-size: 32px !important;
+            }
+            
+            .subtitle {
+                font-size: 18px !important;
+            }
+            
+            .cta-button {
+                display: block !important;
+                width: 100% !important;
+                box-sizing: border-box;
+                padding: 18px 24px !important;
+                font-size: 16px !important;
+            }
+            
+            .benefits {
+                flex-direction: column;
+                gap: 12px;
+            }
+            
+            .benefit-item {
+                min-width: auto;
+            }
+            
+            .logo-text {
+                font-size: 24px !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="outer-container">
+        <div class="email-container">
+            <!-- Header with modern gradient -->
+            <div class="header">
+                <div class="logo-container">
+                    <img src="https://assets.cardcapture.io/cc-logo-transparent-min.png" alt="CardCapture" />
+                    <h1 class="logo-text">CardCapture</h1>
+                </div>
+            </div>
+            
+            <!-- Main Content -->
+            <div class="content">
+                <!-- Status badge -->
+                <div style="text-align: center;">
+                    <div class="status-badge">
+                        <div class="status-dot"></div>
+                        Complete Your Profile in Seconds
+                    </div>
+                </div>
+                
+                <!-- Main headline -->
+                <h1 class="main-title">Your Info, <span class="highlight">Your Control</span></h1>
+                <p class="subtitle">One profile that works everywhere. Update once, share securely.</p>
+                
+                <!-- CTA Button -->
+                <div class="cta-container">
+                    <a href="#" class="cta-button">Complete Registration →</a>
+                </div>
+                
+                <!-- Benefits matching web design -->
+                <div class="benefits">
+                    <div class="benefit-item">
+                        <div class="benefit-icon">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                            </svg>
+                        </div>
+                        <h3 class="benefit-title">Easy</h3>
+                        <p class="benefit-text">Set up once, use everywhere</p>
+                    </div>
+                    
+                    <div class="benefit-item">
+                        <div class="benefit-icon">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <h3 class="benefit-title">Yours</h3>
+                        <p class="benefit-text">You control and update your data</p>
+                    </div>
+                    
+                    <div class="benefit-item">
+                        <div class="benefit-icon">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                            </svg>
+                        </div>
+                        <h3 class="benefit-title">Secure</h3>
+                        <p class="benefit-text">Privacy-first, encrypted sharing</p>
+                    </div>
+                </div>
+                
+                <!-- Security notice -->
+                <div class="security-notice">
+                    <p class="security-notice-text">🔒 This link is secure and expires in 24 hours for your protection</p>
+                </div>
+                
+                <p class="expiry-notice">
+                    If you didn't request this, you can safely ignore this email.
+                </p>
+            </div>
+            
+            <!-- Footer -->
+            <div class="footer">
+                <p class="footer-text">© 2025 CardCapture. All rights reserved.</p>
+                <p class="footer-text">
+                    <a href="#" class="footer-link">Privacy Policy</a> | 
+                    <a href="#" class="footer-link">Terms of Service</a>
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

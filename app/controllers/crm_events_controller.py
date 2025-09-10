@@ -120,10 +120,10 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
         contents = await file.read()
         csv_text = contents.decode('utf-8')
         csv_reader = csv.DictReader(io.StringIO(csv_text))
-        # Normalize header names to avoid BOM/whitespace mismatches with FE mapping
+        # Normalize header names to avoid BOM/whitespace/quotes mismatches with FE mapping
         if csv_reader.fieldnames:
             csv_reader.fieldnames = [
-                (fn or "").strip().replace("\ufeff", "") for fn in csv_reader.fieldnames
+                (fn or "").strip().replace("\ufeff", "").strip('"').strip("'") for fn in csv_reader.fieldnames
             ]
         
         # Convert to list to get total count, then filter out blank rows
@@ -147,6 +147,8 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
         
         # Parse and validate all rows first
         print("🔍 Parsing and validating CSV data...")
+        print(f"📋 Received mapping: {mapping}")
+        print(f"📋 CSV headers (first row): {list(csv_rows[0].keys()) if csv_rows else 'No rows'}")
         events_to_create = []
         
         # Pre-normalize mapping keys for consistent lookup
@@ -155,17 +157,27 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
             for key in ("name", "date", "crm_id")
         }
         norm_map = {k: v.replace("\ufeff", "") for k, v in norm_map.items()}
+        print(f"📋 Normalized mapping: {norm_map}")
 
         for row_num, row in enumerate(csv_rows, start=2):
             try:
-                # Normalize row keys (trim and strip BOM)
-                norm_row = { (k or "").strip().replace("\ufeff", ""): (v or "") for k, v in row.items() }
+                # Normalize row keys (trim and strip BOM and quotes)
+                norm_row = { (k or "").strip().replace("\ufeff", "").strip('"').strip("'"): (v or "") for k, v in row.items() }
+                
+                # Debug output for first row
+                if row_num == 2:
+                    print(f"🔍 First data row (normalized): {norm_row}")
+                    print(f"🔍 Looking for name in column: '{norm_map.get('name', 'NOT SET')}'")
+                    print(f"🔍 Looking for date in column: '{norm_map.get('date', 'NOT SET')}'")
+                    print(f"🔍 Looking for crm_id in column: '{norm_map.get('crm_id', 'NOT SET')}'")
+                
                 # Map columns based on user's mapping
+                # Only try to get values if the mapping column name is not empty
                 event_data = {
                     "school_id": school_id,
-                    "name": norm_row.get(norm_map.get("name", ""), "").strip(),
-                    "event_date": norm_row.get(norm_map.get("date", ""), "").strip(),
-                    "crm_event_id": norm_row.get(norm_map.get("crm_id", ""), "").strip(),
+                    "name": norm_row.get(norm_map["name"], "").strip() if norm_map.get("name") else "",
+                    "event_date": norm_row.get(norm_map["date"], "").strip() if norm_map.get("date") else "",
+                    "crm_event_id": norm_row.get(norm_map["crm_id"], "").strip() if norm_map.get("crm_id") else "",
                     "source": "csv"
                 }
                 

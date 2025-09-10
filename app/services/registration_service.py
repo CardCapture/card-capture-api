@@ -371,17 +371,14 @@ class RegistrationService:
         magic_url = f"{self.frontend_url}/register/verify?token={token}"
         
         try:
+            # Load the modern email template
+            html_content = self._load_registration_email_template(magic_url)
+            
             params = {
                 "from": "CardCapture <no-reply@cardcapture.io>",
                 "to": [email],
                 "subject": "Complete your CardCapture registration",
-                "html": f"""
-                <h2>Complete your registration</h2>
-                <p>Click the link below to securely complete your CardCapture registration:</p>
-                <p><a href="{magic_url}" style="display: inline-block; padding: 12px 24px; background-color: #3B82F6; color: white; text-decoration: none; border-radius: 6px;">Complete Registration</a></p>
-                <p>This link expires in 24 hours.</p>
-                <p>If you didn't request this, you can safely ignore this email.</p>
-                """
+                "html": html_content
             }
             
             resend.Emails.send(params)
@@ -390,6 +387,50 @@ class RegistrationService:
         except Exception as e:
             log_debug(f"Failed to send registration email: {str(e)}", service="registration")
             log_debug(f"📧 Manual registration link: {magic_url}", service="registration")
+    
+    def _load_registration_email_template(self, magic_url: str) -> str:
+        """Load and populate the registration email template"""
+        template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
+                                   "student_registration_email_template.html")
+        
+        try:
+            with open(template_path, 'r', encoding='utf-8') as f:
+                template = f.read()
+            
+            # Replace template variables
+            template = template.replace("{{MAGIC_LINK_URL}}", magic_url)
+            template = template.replace("{{CURRENT_YEAR}}", str(datetime.now().year))
+            template = template.replace("{{SITE_URL}}", self.frontend_url)
+            
+            return template
+            
+        except FileNotFoundError:
+            log_debug("Email template not found, using fallback", service="registration")
+            # Fallback to basic template if file not found
+            return f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Complete your CardCapture registration</title>
+            </head>
+            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h2 style="color: #1e293b;">Your Info, Your Control</h2>
+                    <p>Complete your student profile in seconds. One profile that works everywhere.</p>
+                    <div style="text-align: center; margin: 40px 0;">
+                        <a href="{magic_url}" 
+                           style="display: inline-block; padding: 16px 32px; background-color: #3B82F6; color: white; text-decoration: none; border-radius: 8px; font-weight: 600;">
+                            Complete Registration →
+                        </a>
+                    </div>
+                    <p style="font-size: 14px; color: #666;">🔒 This link is secure and expires in 24 hours for your protection.</p>
+                    <p style="font-size: 14px; color: #666;">If you didn't request this, you can safely ignore this email.</p>
+                </div>
+            </body>
+            </html>
+            """
     
     async def _send_confirmation_email_with_qr(self, email: str, student_id: str, token: str, qr_data_uri: str):
         """Send confirmation email with QR code"""
