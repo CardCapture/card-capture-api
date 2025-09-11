@@ -18,6 +18,8 @@ RUN apt-get update && \
 
 # Copy requirements and install dependencies
 COPY requirements.txt .
+# Force cache bust for scipy dependency addition
+RUN echo "Cache bust: $(date)" > /tmp/cache_bust
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # Copy the rest of the application code
