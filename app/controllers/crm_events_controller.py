@@ -3,7 +3,7 @@ from fastapi import HTTPException, UploadFile
 from app.services.crm_events_service import CRMEventsService
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, date
 
 service = CRMEventsService()
 
@@ -204,10 +204,12 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
                 if ' ' in date_string:
                     date_string = date_string.split(' ')[0]
                 
-                # Try various date formats
+                # Try various date formats - use date() to avoid timezone issues
                 for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y', '%Y/%m/%d', '%m/%d/%y', '%d/%m/%y']:
                     try:
-                        parsed_date = datetime.strptime(date_string, fmt)
+                        parsed_datetime = datetime.strptime(date_string, fmt)
+                        # Convert to date object to avoid any timezone interpretation issues
+                        parsed_date = parsed_datetime.date()
                         event_data["event_date"] = parsed_date.strftime('%Y-%m-%d')
                         break
                     except ValueError:
