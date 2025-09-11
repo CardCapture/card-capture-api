@@ -18,6 +18,9 @@ from app.utils.retry_utils import log_debug
 def download_from_supabase(file_url: str, local_path: str) -> None:
     """Download file from Supabase storage to local path"""
     try:
+        # Get Supabase client
+        supabase_client = get_supabase_client()
+        
         # Extract bucket and file path from URL
         # Format: "bucket-name/path/to/file.ext"
         url_parts = file_url.split('/', 1)  # Split only on first slash
@@ -214,9 +217,18 @@ async def extract_signup_data_with_gemini(image_path: str) -> List[Dict]:
             "response_text": response.text[:200] + "..." if len(response.text) > 200 else response.text
         }, service="signup")
         
-        # Parse JSON response
+        # Parse JSON response (handle markdown code blocks)
         try:
-            records = json.loads(response.text.strip())
+            response_text = response.text.strip()
+            
+            # Remove markdown code blocks if present
+            if response_text.startswith('```json'):
+                response_text = response_text.split('```json')[1]
+            if response_text.endswith('```'):
+                response_text = response_text.split('```')[0]
+            
+            response_text = response_text.strip()
+            records = json.loads(response_text)
         except json.JSONDecodeError as e:
             log_debug(f"Failed to parse Gemini response as JSON: {str(e)}", {
                 "response_text": response.text

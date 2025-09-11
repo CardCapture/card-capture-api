@@ -337,7 +337,7 @@ async def get_image_service(document_id: str):
             
             # Download from Supabase storage and return
             try:
-                storage_response = supabase_client.storage.from_("card-images").download(image_path)
+                storage_response = supabase_client.storage.from_("cards-uploads").download(image_path)
                 return FileResponse(
                     path=io.BytesIO(storage_response),
                     media_type="image/jpeg",
