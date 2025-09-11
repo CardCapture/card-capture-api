@@ -24,6 +24,11 @@ def select_extracted_data_image_db(supabase_client, document_id: str):
     """Get extracted data image path with proper error handling."""
     return supabase_client.table("extracted_data").select("image_path, trimmed_image_path").eq("document_id", document_id).single().execute()
 
+@safe_db_operation("Get reviewed data image")
+def select_reviewed_data_image_db(supabase_client, document_id: str):
+    """Get reviewed data image path with proper error handling."""
+    return supabase_client.table("reviewed_data").select("image_path, trimmed_image_path").eq("document_id", document_id).single().execute()
+
 @ensure_atomic_updates(["processing_jobs", "extracted_data"])
 def create_processing_job_with_data(supabase_client, job_data: Dict[str, Any], extracted_data: Dict[str, Any]):
     """
