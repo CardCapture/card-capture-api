@@ -18,9 +18,12 @@ RUN apt-get update && \
 
 # Copy requirements and install dependencies
 COPY requirements.txt .
-# Force cache bust for scipy dependency addition
-RUN echo "Cache bust: $(date)" > /tmp/cache_bust
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# Force cache bust for scipy dependency addition - aggressive busting
+RUN echo "Cache bust aggressive: 2025-09-11-$(date +%s)" > /tmp/cache_bust
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+# Verify scipy installation
+RUN python -c "import scipy; print(f'Scipy version: {scipy.__version__}')"
 
 # Copy the rest of the application code
 COPY . .
