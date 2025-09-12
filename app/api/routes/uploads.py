@@ -68,12 +68,23 @@ async def upload_signup_sheet(
     Creates multiple reviewed_data records from a single table image
     """
     try:
-        # Validate file type
-        if not file.content_type or not file.content_type.startswith('image/'):
-            raise HTTPException(
-                status_code=400, 
-                detail="Only image files are supported for sign-up sheets"
-            )
+        # Validate file type (including HEIC support)
+        valid_content_types = [
+            'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
+            'image/bmp', 'image/tiff', 'image/webp',
+            'image/heic', 'image/heif'
+        ]
+        
+        # Check file extension for HEIC files (content type might be generic)
+        file_ext = os.path.splitext(file.filename or "")[1].lower() if file.filename else ""
+        is_heic = file_ext in ['.heic', '.heif']
+        
+        if not file.content_type or (not file.content_type.startswith('image/') and not is_heic):
+            if not (file.content_type in valid_content_types or is_heic):
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Only image files (including HEIC) are supported for sign-up sheets"
+                )
         
         # Validate required fields
         if not event_id or not school_id:

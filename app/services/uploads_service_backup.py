@@ -11,7 +11,6 @@ from app.repositories.uploads_repository import (
     insert_processing_job_db,
     insert_extracted_data_db,
     select_extracted_data_image_db,
-    select_reviewed_data_image_db,
     update_processing_job_db
 )
 from PIL import Image
@@ -23,20 +22,6 @@ import json
 from app.utils.retry_utils import retry_with_exponential_backoff, log_debug
 from datetime import datetime, timezone
 from typing import Dict, Any
-from pathlib import Path
-
-# Register HEIF opener for HEIC support
-try:
-    import pillow_heif
-    pillow_heif.register_heif_opener()
-    HEIC_SUPPORT = True
-    log_debug("HEIC support enabled", service="uploads")
-except ImportError:
-    HEIC_SUPPORT = False
-    log_debug("HEIC support not available - pillow_heif not installed", service="uploads")
-except Exception as e:
-    HEIC_SUPPORT = False
-    log_debug(f"HEIC support failed to initialize: {e}", service="uploads")
 
 # Try to import SFTP utils, but gracefully handle if not available
 try:
@@ -50,32 +35,6 @@ except ImportError as e:
     log_debug(f"SFTP functionality not available: {str(e)}", service="uploads")
     SFTP_AVAILABLE = False
     upload_to_slate = None
-
-def convert_heic_to_jpeg(heic_path: str) -> str:
-    """
-    Convert HEIC/HEIF file to JPEG
-    Returns path to converted file
-    """
-    try:
-        log_debug(f"Converting HEIC file: {heic_path}", service="uploads")
-        
-        # Open HEIC image
-        img = Image.open(heic_path)
-        
-        # Convert to RGB if necessary
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        
-        # Save as JPEG
-        jpeg_path = heic_path.replace('.heic', '.jpg').replace('.HEIC', '.jpg').replace('.heif', '.jpg').replace('.HEIF', '.jpg')
-        img.save(jpeg_path, 'JPEG', quality=95, optimize=True)
-        
-        log_debug(f"HEIC converted to JPEG: {jpeg_path}", service="uploads")
-        return jpeg_path
-        
-    except Exception as e:
-        log_debug(f"Error converting HEIC: {e}", service="uploads")
-        raise
 
 def split_pdf_to_pngs(pdf_path, output_dir=None):
     """
@@ -114,23 +73,9 @@ async def upload_file_service(file, school_id, event_id, user):
         if not file:
             return JSONResponse(status_code=400, content={"error": "No file uploaded."})
         
-        # Enhanced allowed types including HEIC
-        allowed_types = [
-            "image/jpeg", "image/jpg", "image/png", "image/gif", 
-            "image/bmp", "image/tiff", "image/webp",
-            "image/heic", "image/heif",  # Add HEIC support
-            "application/pdf"
-        ]
-        
-        # Check file extension if content type is not properly set (common with HEIC)
-        file_ext = Path(file.filename).suffix.lower() if file.filename else ""
-        
-        # Handle HEIC files that might have generic content type
-        if file_ext in ['.heic', '.heif'] and file.content_type not in allowed_types:
-            file.content_type = "image/heic"
-            log_debug(f"Detected HEIC file by extension: {file.filename}", service="uploads")
-        
-        if file.content_type not in allowed_types and file_ext not in ['.heic', '.heif']:
+        # Reject files that aren't images or PDFs
+        allowed_types = ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/tiff", "application/pdf"]
+        if file.content_type not in allowed_types:
             return JSONResponse(
                 status_code=400, 
                 content={
@@ -153,44 +98,21 @@ async def upload_file_service(file, school_id, event_id, user):
             }, service="uploads")
             
             # Create temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext or os.path.splitext(file.filename)[1]) as temp_file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
                 temp_file_path = temp_file.name
                 temp_file.write(file_content)
             
-            # Handle HEIC files - convert to JPEG first
-            converted_file_path = None
-            if file.content_type in ["image/heic", "image/heif"] or file_ext in ['.heic', '.heif']:
-                log_debug("Processing HEIC file...", service="uploads")
-                
-                if not HEIC_SUPPORT:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"error": "HEIC files are not supported on this server. Please convert to JPEG first."}
-                    )
-                
-                converted_file_path = convert_heic_to_jpeg(temp_file_path)
-                working_file_path = converted_file_path
-                file.content_type = "image/jpeg"  # Update content type
-            else:
-                working_file_path = temp_file_path
-            
             # Handle PDF files
             if file.content_type == "application/pdf":
-                return await handle_pdf_upload(working_file_path, file.filename, school_id, event_id, user)
+                return await handle_pdf_upload(temp_file_path, file.filename, school_id, event_id, user)
             
-            # Handle image files (including converted HEIC)
+            # Handle image files
             compressed_file_path = None
             try:
-                log_debug(f"Processing image: {file.filename}", service="uploads")
+                log_debug(f"Compressing image before upload: {file.filename}", service="uploads")
                 
-                # Apply PhotoRoom background removal via ensure_trimmed_image
-                # This will use PhotoRoom if enabled, otherwise fall back to boundary detection
-                processed_file_path = ensure_trimmed_image(working_file_path)
-                
-                log_debug(f"Image processing complete: {processed_file_path}", service="uploads")
-                
-                # Open the processed image for final optimization
-                with Image.open(processed_file_path) as img:
+                # Open and compress the image
+                with Image.open(temp_file_path) as img:
                     # Convert to RGB if necessary
                     if img.mode in ('RGBA', 'LA', 'P'):
                         img = img.convert('RGB')
@@ -252,23 +174,18 @@ async def upload_file_service(file, school_id, event_id, user):
                 return JSONResponse(status_code=200, content={
                     "message": "File uploaded successfully",
                     "job_id": job_id,
-                    "document_id": job_id,
-                    "processed_with": "photoroom" if os.getenv('USE_PHOTOROOM', 'true').lower() == 'true' else "boundary_detection"
+                    "document_id": job_id
                 })
                 
             finally:
-                # Clean up temporary files
+                # Clean up compressed file
                 if compressed_file_path and os.path.exists(compressed_file_path):
                     os.unlink(compressed_file_path)
-                if 'processed_file_path' in locals() and processed_file_path and os.path.exists(processed_file_path):
-                    os.unlink(processed_file_path)
                 
         finally:
-            # Clean up original and converted temp files
+            # Clean up original temp file
             if temp_file_path and os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
-            if converted_file_path and os.path.exists(converted_file_path):
-                os.unlink(converted_file_path)
                 
     except Exception as e:
         log_debug(f"Error uploading file: {e}", service="uploads")
@@ -304,11 +221,8 @@ async def handle_pdf_upload(pdf_path: str, original_filename: str, school_id: st
             for i, png_path in enumerate(png_paths):
                 log_debug(f"Processing page {i+1}: {png_path}", service="uploads")
                 
-                # Process with PhotoRoom/boundary detection
-                processed_path = ensure_trimmed_image(png_path)
-                
-                # Convert processed image to optimized JPG
-                with Image.open(processed_path) as img:
+                # Convert PNG to JPG
+                with Image.open(png_path) as img:
                     # Convert to RGB if necessary
                     if img.mode in ('RGBA', 'LA', 'P'):
                         img = img.convert('RGB')
@@ -316,7 +230,7 @@ async def handle_pdf_upload(pdf_path: str, original_filename: str, school_id: st
                     # Save as JPG
                     jpg_path = png_path.replace('.png', '.jpg')
                     img.save(jpg_path, "JPEG", quality=85, optimize=True)
-                    log_debug(f"Processed and converted to JPG: {jpg_path}", service="uploads")
+                    log_debug(f"Converted PNG to JPG: {jpg_path}", service="uploads")
                 
                 # Upload to storage with proper JPG filename
                 page_filename = f"{os.path.splitext(original_filename)[0]} (Page {i+1}).jpg"
@@ -377,17 +291,13 @@ async def handle_pdf_upload(pdf_path: str, original_filename: str, school_id: st
                     }, service="uploads")
         
         finally:
-            # Clean up any remaining PNG and JPG files
+            # Clean up any remaining PNG files
             for png_path in png_paths:
                 if os.path.exists(png_path):
                     os.unlink(png_path)
                 jpg_path = png_path.replace('.png', '.jpg')
                 if os.path.exists(jpg_path):
                     os.unlink(jpg_path)
-                # Also clean up any processed files that might exist
-                processed_path = png_path.replace('.png', '_trimmed.jpg')
-                if os.path.exists(processed_path):
-                    os.unlink(processed_path)
         
         return JSONResponse(status_code=200, content={
             "message": f"PDF uploaded successfully. Split into {len(png_paths)} images.",
@@ -418,35 +328,24 @@ async def get_image_service(document_id: str):
     try:
         log_debug(f"Image requested for document_id: {document_id}", service="uploads")
         
-        # First try the reviewed_data table (Pipeline V3 data)
-        result = select_reviewed_data_image_db(supabase_client, document_id)
-        
-        # If not found, fall back to extracted_data table (legacy data)
-        if not result or not result.data:
-            log_debug(f"Not found in reviewed_data, trying extracted_data table", service="uploads")
-            result = select_extracted_data_image_db(supabase_client, document_id)
+        # Query the extracted_data table to get the image path
+        result = select_extracted_data_image_db(supabase_client, document_id)
         
         if result and result.data:
-            data = result.data[0]
-            # Prefer trimmed_image_path if available, otherwise use image_path
-            image_path = data.get("trimmed_image_path") or data.get("image_path")
-            log_debug(f"Found image path: {image_path} (trimmed: {data.get('trimmed_image_path')}, original: {data.get('image_path')})", service="uploads")
+            image_path = result.data[0].get("image_path")
+            log_debug(f"Found image path: {image_path}", service="uploads")
             
-            if image_path:
-                # Download from Supabase storage and return
-                try:
-                    storage_response = supabase_client.storage.from_("cards-uploads").download(image_path)
-                    return FileResponse(
-                        path=io.BytesIO(storage_response),
-                        media_type="image/jpeg",
-                        filename=f"{document_id}.jpg"
-                    )
-                except Exception as download_error:
-                    log_debug(f"File not found at path: {image_path}", {"error": str(download_error)}, service="uploads")
-                    return JSONResponse(status_code=404, content={"error": "Image file not found in storage"})
-            else:
-                log_debug(f"No image path found in database record", service="uploads")
-                return JSONResponse(status_code=404, content={"error": "No image path available"})
+            # Download from Supabase storage and return
+            try:
+                storage_response = supabase_client.storage.from_("cards-uploads").download(image_path)
+                return FileResponse(
+                    path=io.BytesIO(storage_response),
+                    media_type="image/jpeg",
+                    filename=f"{document_id}.jpg"
+                )
+            except Exception as download_error:
+                log_debug(f"File not found at path: {image_path}", {"error": str(download_error)}, service="uploads")
+                return JSONResponse(status_code=404, content={"error": "Image file not found in storage"})
         else:
             log_debug(f"No database record found for document_id: {document_id}", service="uploads")
             return JSONResponse(status_code=404, content={"error": "Document not found"})

@@ -78,6 +78,8 @@ class CanonicalFieldMapperEnhancer(FieldEnhancer):
             "studenttype": "student_type",
             "student_category": "student_type",
             "entryterm": "entry_term",
+            "current_school": "high_school",
+            "grad_year": "graduation_year",
         }
         
         mapped_fields = {}

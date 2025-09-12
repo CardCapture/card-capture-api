@@ -176,12 +176,22 @@ def process_job_v3(job: Dict[str, Any]) -> None:
         cropped_image_path = result.metadata.get("cropped_image_path")
         trimmed_storage_path = None
         
+        log_debug(f"[IMAGE DEBUG] Cropped image path from pipeline: {cropped_image_path}", service="worker_v3")
+        log_debug(f"[IMAGE DEBUG] Cropped image exists: {os.path.exists(cropped_image_path) if cropped_image_path else 'N/A'}", service="worker_v3")
+        log_debug(f"[IMAGE DEBUG] Original tmp file: {tmp_file}", service="worker_v3")
+        log_debug(f"[IMAGE DEBUG] Original tmp file exists: {os.path.exists(tmp_file) if tmp_file else 'N/A'}", service="worker_v3")
+        
         if cropped_image_path and os.path.exists(cropped_image_path):
             # Use the cropped image from DocAI processing
             trimmed_image_path = cropped_image_path
+            log_debug(f"[IMAGE DEBUG] Using cropped image from DocAI: {trimmed_image_path}", service="worker_v3")
         else:
             # Fall back to trimming the original
             trimmed_image_path = ensure_trimmed_image(tmp_file)
+            log_debug(f"[IMAGE DEBUG] Using fallback trimmed image: {trimmed_image_path}", service="worker_v3")
+        
+        log_debug(f"[IMAGE DEBUG] Final trimmed image path: {trimmed_image_path}", service="worker_v3")
+        log_debug(f"[IMAGE DEBUG] Final trimmed image exists: {os.path.exists(trimmed_image_path) if trimmed_image_path else 'N/A'}", service="worker_v3")
         
         try:
             trimmed_storage_path = upload_to_supabase_storage_from_path(
@@ -190,9 +200,9 @@ def process_job_v3(job: Dict[str, Any]) -> None:
                 user_id,
                 os.path.basename(trimmed_image_path)
             )
-            log_debug(f"Trimmed image uploaded: {trimmed_storage_path}", service="worker_v3")
+            log_debug(f"[IMAGE DEBUG] ✅ Trimmed image uploaded to storage: {trimmed_storage_path}", service="worker_v3")
         except Exception as e:
-            log_debug(f"Failed to upload trimmed image: {e}", service="worker_v3")
+            log_debug(f"[IMAGE DEBUG] ❌ Failed to upload trimmed image: {e}", service="worker_v3")
         
         # Step 4: Save results to database
         log_debug("=== STEP 4: SAVE TO DATABASE ===", service="worker_v3")
@@ -221,18 +231,34 @@ def process_job_v3(job: Dict[str, Any]) -> None:
         }, service="worker_v3")
         
         now = datetime.now(timezone.utc).isoformat()
+        
+        # Determine original image path - CRITICAL: This should be the storage path, not local path
+        original_image_path = job.get("image_path")
+        log_debug(f"[IMAGE DEBUG] Original image path from job: {original_image_path}", service="worker_v3")
+        log_debug(f"[IMAGE DEBUG] Trimmed storage path: {trimmed_storage_path}", service="worker_v3")
+        
+        # CRITICAL: Validate image paths before saving to database
+        if original_image_path and not original_image_path.startswith("cards-uploads/"):
+            log_debug(f"[IMAGE DEBUG] ⚠️ WARNING: Original image path looks like local path, not storage path: {original_image_path}", service="worker_v3")
+            log_debug(f"[IMAGE DEBUG] This may cause UI image loading issues", service="worker_v3")
+        
         review_data = {
             "document_id": job_id,
             "fields": fields_dict,
             "school_id": school_id,
             "user_id": user_id,
             "event_id": event_id,
-            "image_path": job.get("image_path"),
+            "image_path": original_image_path,
             "trimmed_image_path": trimmed_storage_path,
             "review_status": result.metadata.get("review_status"),
             "created_at": now,
             "updated_at": now
         }
+        
+        log_debug(f"[IMAGE DEBUG] Final review_data image paths:", {
+            "image_path": review_data["image_path"],
+            "trimmed_image_path": review_data["trimmed_image_path"]
+        }, service="worker_v3")
         
         log_debug("🔍 CRITICAL: Saving review data", {
             "document_id": job_id,

@@ -18,6 +18,9 @@ from app.utils.retry_utils import log_debug
 def download_from_supabase(file_url: str, local_path: str) -> None:
     """Download file from Supabase storage to local path"""
     try:
+        # Get Supabase client
+        supabase_client = get_supabase_client()
+        
         # Extract bucket and file path from URL
         # Format: "bucket-name/path/to/file.ext"
         url_parts = file_url.split('/', 1)  # Split only on first slash
@@ -61,8 +64,8 @@ Expected fields (in order they typically appear):
 6. city (City)
 7. state (State - use 2-letter abbreviation like TX, CA, etc.)
 8. zip_code (ZIP Code, Postal Code)
-9. current_school (Current School, High School)
-10. grad_year (Graduation Year, Grad Year)
+9. high_school (Current School, High School)
+10. graduation_year (Graduation Year, Grad Year)
 
 CRITICAL ADDRESS HANDLING:
 - If address appears as one line like "123 Main St, Austin TX 78701", split it:
@@ -83,8 +86,8 @@ Output format - respond ONLY with this JSON array:
     "city": "Austin",
     "state": "TX", 
     "zip_code": "78701",
-    "current_school": "Roosevelt High School",
-    "grad_year": "2024"
+    "high_school": "Roosevelt High School",
+    "graduation_year": "2024"
   }
 ]
 
@@ -214,9 +217,18 @@ async def extract_signup_data_with_gemini(image_path: str) -> List[Dict]:
             "response_text": response.text[:200] + "..." if len(response.text) > 200 else response.text
         }, service="signup")
         
-        # Parse JSON response
+        # Parse JSON response (handle markdown code blocks)
         try:
-            records = json.loads(response.text.strip())
+            response_text = response.text.strip()
+            
+            # Remove markdown code blocks if present
+            if response_text.startswith('```json'):
+                response_text = response_text.split('```json')[1]
+            if response_text.endswith('```'):
+                response_text = response_text.split('```')[0]
+            
+            response_text = response_text.strip()
+            records = json.loads(response_text)
         except json.JSONDecodeError as e:
             log_debug(f"Failed to parse Gemini response as JSON: {str(e)}", {
                 "response_text": response.text

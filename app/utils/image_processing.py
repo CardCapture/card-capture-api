@@ -1,30 +1,205 @@
+"""
+Integrated Image Processing with PhotoRoom
+Production-ready replacement for image_processing.py
+Maintains backwards compatibility while adding PhotoRoom support
+"""
+
 import os
+import logging
+from pathlib import Path
+from typing import Optional, Tuple
+from PIL import Image, ImageOps
 import numpy as np
-from PIL import Image, ExifTags, ImageOps
+from scipy import ndimage
 from google.cloud import documentai_v1 as documentai
+
+# Import configuration
 from app.config import PROJECT_ID, DOCAI_LOCATION, DOCAI_PROCESSOR_ID, TRIMMED_FOLDER
+
+# Import PhotoRoom service
+try:
+    from app.services.photoroom_service import get_photoroom_service
+    PHOTOROOM_AVAILABLE = True
+except ImportError:
+    PHOTOROOM_AVAILABLE = False
+    print("[WARNING] PhotoRoom service not available, using fallback methods only")
+
+# Register HEIF opener if available
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    HEIC_SUPPORT = True
+    print("[INFO] HEIC support enabled")
+except ImportError:
+    HEIC_SUPPORT = False
+    print("[WARNING] HEIC support not available - pillow_heif not installed")
+except Exception as e:
+    HEIC_SUPPORT = False
+    print(f"[WARNING] HEIC support failed to initialize: {e}")
+
+logger = logging.getLogger(__name__)
+
+# Feature flag for PhotoRoom (can be controlled via environment)
+USE_PHOTOROOM = os.getenv('USE_PHOTOROOM', 'true').lower() == 'true' and PHOTOROOM_AVAILABLE
+
+
+def ensure_proper_orientation(image_path: str) -> str:
+    """
+    Properly handle EXIF orientation and prepare image for processing.
+    Handles HEIC conversion if needed.
+    """
+    try:
+        # Check if HEIC and convert if needed
+        file_ext = Path(image_path).suffix.lower()
+        if file_ext in ['.heic', '.heif'] and HEIC_SUPPORT:
+            print(f"[Orientation] Converting HEIC file: {image_path}")
+            img = Image.open(image_path)
+            img = ImageOps.exif_transpose(img)
+            
+            # Convert to RGB
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Save as JPEG
+            base_path, _ = os.path.splitext(image_path)
+            processed_path = f"{base_path}_processed.jpg"
+            img.save(processed_path, format='JPEG', quality=95, optimize=True)
+            print(f"[Orientation] HEIC converted to: {processed_path}")
+            return processed_path
+        
+        # Regular image processing
+        img = Image.open(image_path)
+        
+        # This handles EXIF orientation automatically
+        img = ImageOps.exif_transpose(img)
+        print(f"✅ EXIF orientation applied successfully")
+        
+        # Check aspect ratio for logging
+        aspect_ratio = img.width / img.height
+        if aspect_ratio > 1.5:
+            print(f"📐 Detected horizontal card format (aspect ratio: {aspect_ratio:.2f})")
+        elif aspect_ratio < 0.7:
+            print(f"📐 Detected vertical card format (aspect ratio: {aspect_ratio:.2f})")
+        else:
+            print(f"📐 Square/ambiguous format (aspect ratio: {aspect_ratio:.2f})")
+        
+        # Convert to RGB if needed
+        if img.mode in ('RGBA', 'LA', 'P'):
+            img = img.convert('RGB')
+        
+        # Save processed image
+        base_path, ext = os.path.splitext(image_path)
+        processed_path = f"{base_path}_processed{ext}"
+        img.save(processed_path, format='JPEG', quality=100, optimize=True)
+        print(f"✅ Processed image saved to: {processed_path}")
+        
+        return processed_path
+        
+    except Exception as e:
+        print(f"[Orientation] Error: {e}")
+        return image_path
+
+
+def detect_card_boundaries(image_path: str, padding: int = 20, white_threshold: int = 245, use_color_detection: bool = True) -> tuple:
+    """
+    Detect the actual card boundaries (existing fallback method)
+    """
+    try:
+        img = Image.open(image_path)
+        img = ImageOps.exif_transpose(img)
+        
+        if use_color_detection:
+            img_array = np.array(img)
+            
+            if len(img_array.shape) == 3:
+                color_std = np.std(img_array, axis=2)
+                brightness = np.mean(img_array, axis=2)
+                not_background = brightness > (white_threshold - 40)
+                allow_variation = color_std < 50
+                potential_card = not_background | (brightness > 240)
+                
+                structure = np.ones((3, 3))
+                potential_card = ndimage.binary_opening(potential_card, structure=structure)
+                
+                labeled_array, num_features = ndimage.label(potential_card)
+                
+                if num_features > 0:
+                    component_sizes = [(labeled_array == i).sum() for i in range(1, num_features + 1)]
+                    min_card_size = img.width * img.height * 0.1
+                    valid_components = []
+                    
+                    for i, size in enumerate(component_sizes):
+                        if size > min_card_size:
+                            valid_components.append((i + 1, size))
+                    
+                    if valid_components:
+                        largest_component = max(valid_components, key=lambda x: x[1])[0]
+                        card_mask = labeled_array == largest_component
+                    else:
+                        print("[CardBoundary] No large enough components found")
+                        card_mask = potential_card
+                else:
+                    card_mask = potential_card
+            else:
+                img_array = np.array(img.convert('L'))
+                card_mask = img_array > white_threshold
+        else:
+            img_array = np.array(img.convert('L'))
+            card_mask = img_array < white_threshold
+        
+        rows = np.any(card_mask, axis=1)
+        cols = np.any(card_mask, axis=0)
+        
+        if not np.any(rows) or not np.any(cols):
+            print("[CardBoundary] No card detected - trying fallback")
+            img_gray = np.array(img.convert('L'))
+            non_white = img_gray < (white_threshold - 50)
+            rows = np.any(non_white, axis=1)
+            cols = np.any(non_white, axis=0)
+            
+            if not np.any(rows) or not np.any(cols):
+                print("[CardBoundary] Fallback also failed")
+                return None
+        
+        top, bottom = np.where(rows)[0][[0, -1]]
+        left, right = np.where(cols)[0][[0, -1]]
+        
+        safe_padding = max(padding, 40)
+        left = max(0, left - safe_padding)
+        top = max(0, top - safe_padding)
+        right = min(img.width, right + safe_padding)
+        bottom = min(img.height, bottom + safe_padding)
+        
+        print(f"[CardBoundary] Detected: ({left}, {top}) to ({right}, {bottom})")
+        
+        return (left, top, right, bottom)
+        
+    except Exception as e:
+        print(f"[CardBoundary] Error: {e}")
+        return None
+
 
 def trim_image_with_docai(input_path: str, output_path: str = None, percent_expand: float = 0.5) -> str:
     """
-    Uses Google Document AI to find the bounding box of form fields, crops the image with a percentage expansion,
-    and saves it to output_path. Returns the output path, or input_path if anything fails.
+    Uses Google Document AI to find the bounding box (existing method)
     """
     try:
-        # Set up output path
         if not output_path:
             filename = os.path.basename(input_path)
             name, ext = os.path.splitext(filename)
             output_path = os.path.join(TRIMMED_FOLDER, f"{name}_trimmed{ext}")
-        # Set up Document AI client
+        
         client = documentai.DocumentProcessorServiceClient()
         name = f"projects/{PROJECT_ID}/locations/{DOCAI_LOCATION}/processors/{DOCAI_PROCESSOR_ID}"
+        
         with open(input_path, "rb") as image_file:
             image_content = image_file.read()
+        
         raw_document = documentai.RawDocument(content=image_content, mime_type="image/jpeg")
         request = documentai.ProcessRequest(name=name, raw_document=raw_document)
         result = client.process_document(request=request)
         document = result.document
-        # Gather all bounding box vertices from entities
+        
         all_vertices = []
         for entity in getattr(document, "entities", []):
             if entity.page_anchor and entity.page_anchor.page_refs:
@@ -41,13 +216,15 @@ def trim_image_with_docai(input_path: str, output_path: str = None, percent_expa
                     elif page_ref.bounding_poly.vertices:
                         for v in page_ref.bounding_poly.vertices:
                             all_vertices.append((v.x, v.y))
+        
         if not all_vertices:
-            print("No bounding box vertices found for any entity. Returning original image.")
+            print("[DocAI] No bounding box vertices found")
             return input_path
+        
         xs, ys = zip(*all_vertices)
         min_x, max_x = min(xs), max(xs)
         min_y, max_y = min(ys), max(ys)
-        # Crop with percent expansion
+        
         img = Image.open(input_path)
         box_width = max_x - min_x
         box_height = max_y - min_y
@@ -57,170 +234,154 @@ def trim_image_with_docai(input_path: str, output_path: str = None, percent_expa
         top = max(int(min_y - expand_y), 0)
         right = min(int(max_x + expand_x), img.width)
         bottom = min(int(max_y + expand_y), img.height)
+        
         cropped_img = img.crop((left, top, right, bottom))
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         cropped_img.save(output_path)
         print(f"[DocAI] Cropped image saved to {output_path}")
         return output_path
+        
     except Exception as e:
-        print(f"[DocAI] Error in trim_image_with_docai: {e}")
+        print(f"[DocAI] Error: {e}")
         return input_path
 
-def detect_card_boundaries(image_path: str, padding: int = 20) -> tuple:
-    """
-    Detect the actual card boundaries by finding non-white content areas.
-    This works universally for any card format as it detects content vs background.
-    
-    Args:
-        image_path: Path to the image file
-        padding: Additional padding to add around detected content (default: 20 pixels)
-        
-    Returns:
-        Tuple of (left, top, right, bottom) coordinates or None if detection fails
-    """
-    try:
-        # Convert image to grayscale for content detection
-        img = Image.open(image_path).convert('L')
-        img_array = np.array(img)
-        
-        # Find non-white areas (content areas vs background)
-        # Use threshold to identify areas that aren't pure white/near-white
-        non_white = img_array < 240  # Adjust threshold as needed
-        
-        # Find the bounding box of all non-white content
-        rows = np.any(non_white, axis=1)
-        cols = np.any(non_white, axis=0)
-        
-        if not np.any(rows) or not np.any(cols):
-            print("[CardBoundary] No content detected - image might be blank or all white")
-            return None
-            
-        # Get the first and last rows/columns with content
-        top, bottom = np.where(rows)[0][[0, -1]]
-        left, right = np.where(cols)[0][[0, -1]]
-        
-        # Add padding to ensure we don't clip content at edges
-        left = max(0, left - padding)
-        top = max(0, top - padding)
-        right = min(img.width, right + padding)
-        bottom = min(img.height, bottom + padding)
-        
-        print(f"[CardBoundary] Detected card boundaries: ({left}, {top}) to ({right}, {bottom})")
-        print(f"[CardBoundary] Card size: {right - left} x {bottom - top}")
-        
-        return (left, top, right, bottom)
-        
-    except Exception as e:
-        print(f"[CardBoundary] Error in boundary detection: {e}")
-        return None
 
-def trim_image_with_boundary_detection(input_path: str, output_path: str = None) -> str:
+def trim_image_with_boundary_detection(input_path: str, output_path: str = None, white_threshold: int = 245, apply_orientation: bool = True) -> str:
     """
-    Trim image using card boundary detection - finds actual content boundaries.
-    This is more accurate than field-based detection as it captures the entire card.
-    
-    Args:
-        input_path: Path to input image
-        output_path: Path for output image (auto-generated if None)
-        
-    Returns:
-        Path to trimmed image, or input_path if trimming fails
+    Trim image using card boundary detection
     """
     try:
-        # Set up output path
+        working_path = input_path
+        if apply_orientation:
+            working_path = ensure_proper_orientation(input_path)
+        
         if not output_path:
             filename = os.path.basename(input_path)
             name, ext = os.path.splitext(filename)
             output_path = os.path.join(TRIMMED_FOLDER, f"{name}_trimmed{ext}")
         
-        # Detect card boundaries
-        boundaries = detect_card_boundaries(input_path)
+        boundaries = detect_card_boundaries(working_path, white_threshold=white_threshold, use_color_detection=True)
+        
         if not boundaries:
-            print("[CardBoundary] Boundary detection failed - returning original image")
+            print("[CardBoundary] Color detection failed, trying grayscale...")
+            boundaries = detect_card_boundaries(working_path, white_threshold=white_threshold-30, use_color_detection=False)
+        
+        if not boundaries:
+            print("[CardBoundary] All boundary detection failed")
             return input_path
         
-        # Crop image to detected boundaries
-        img = Image.open(input_path)
+        img = Image.open(working_path)
         left, top, right, bottom = boundaries
         cropped_img = img.crop((left, top, right, bottom))
         
-        # Ensure output directory exists and save
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        cropped_img.save(output_path)
+        cropped_img.save(output_path, format='JPEG', quality=100, optimize=True)
         
         print(f"[CardBoundary] Cropped image saved to {output_path}")
         return output_path
         
     except Exception as e:
-        print(f"[CardBoundary] Error in trim_image_with_boundary_detection: {e}")
+        print(f"[CardBoundary] Error: {e}")
         return input_path
 
-def ensure_proper_orientation(image_path: str) -> str:
+
+def process_with_photoroom(image_path: str, output_dir: Optional[str] = None) -> Optional[str]:
     """
-    Properly handle EXIF orientation and prepare image for processing.
-    No longer forces vertical orientation - respects the card's natural layout.
+    Process image with PhotoRoom API for background removal
+    Returns path to processed image or None if failed
     """
-    img = Image.open(image_path)
+    if not USE_PHOTOROOM:
+        print("[PhotoRoom] Disabled via feature flag")
+        return None
     
-    # This handles EXIF orientation automatically and strips EXIF data
-    img = ImageOps.exif_transpose(img)
-    print(f"✅ EXIF orientation applied successfully")
-    
-    # Check if this appears to be a horizontal card format
-    aspect_ratio = img.width / img.height
-    if aspect_ratio > 1.5:  # Clearly horizontal card
-        print(f"📐 Detected horizontal card format (aspect ratio: {aspect_ratio:.2f}) - preserving orientation")
-    elif aspect_ratio < 0.7:  # Clearly vertical card
-        print(f"📐 Detected vertical card format (aspect ratio: {aspect_ratio:.2f}) - preserving orientation")
-    else:
-        print(f"📐 Square/ambiguous format (aspect ratio: {aspect_ratio:.2f}) - preserving original orientation")
-    
-    # Convert to RGB if needed
-    if img.mode in ('RGBA', 'LA', 'P'):
-        img = img.convert('RGB')
+    try:
+        print(f"[PhotoRoom] Processing image: {image_path}")
+        photoroom_service = get_photoroom_service()
         
-    # Save processed image with corrected path construction
-    base_path, ext = os.path.splitext(image_path)
-    processed_path = f"{base_path}_processed{ext}"
-    img.save(processed_path, format='JPEG', quality=100, optimize=True)
-    print(f"✅ Processed image saved to: {processed_path}")
-    
-    return processed_path
+        # Use TRIMMED_FOLDER as output directory if not specified
+        if not output_dir:
+            output_dir = TRIMMED_FOLDER
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        result = photoroom_service.remove_background(
+            image_path,
+            output_dir=output_dir
+        )
+        
+        if result['success']:
+            # Return white background version (production default)
+            processed_path = result['white_bg_path']
+            print(f"[PhotoRoom] Success! Processed image: {processed_path}")
+            return processed_path
+        else:
+            print(f"[PhotoRoom] Failed: {result.get('message')}")
+            return None
+            
+    except Exception as e:
+        print(f"[PhotoRoom] Error: {e}")
+        return None
+
 
 def ensure_trimmed_image(original_image_path: str) -> str:
+    """
+    Main entry point - maintains backwards compatibility
+    Enhanced with PhotoRoom support
+    """
     print(f"🔄 Processing image: {original_image_path}")
+    
     try:
-        # Ensure proper orientation (EXIF handling, no forced rotation)
+        # Step 1: Ensure proper orientation (handles HEIC conversion)
         processed_path = ensure_proper_orientation(original_image_path)
         
-        # Try card boundary detection first (universal method for all card formats)
-        print(f"🎯 Attempting card boundary detection...")
-        trimmed_path = trim_image_with_boundary_detection(processed_path)
-        
-        # If boundary detection returns the original path, it failed - try DocAI fallback
-        if trimmed_path == processed_path:
-            print(f"⚠️ Card boundary detection failed, falling back to DocAI field detection...")
-            trimmed_path = trim_image_with_docai(processed_path, percent_expand=0.80)  # Higher expansion for better coverage
+        # Step 2: Try PhotoRoom first (if enabled)
+        if USE_PHOTOROOM:
+            print(f"🎨 Attempting PhotoRoom background removal...")
+            photoroom_result = process_with_photoroom(processed_path)
             
-            # If DocAI also fails, return original
+            if photoroom_result and os.path.exists(photoroom_result):
+                print(f"✅ PhotoRoom processing successful")
+                return photoroom_result
+            else:
+                print(f"⚠️ PhotoRoom failed or unavailable, falling back to boundary detection")
+        
+        # Step 3: Fall back to boundary detection
+        print(f"🎯 Attempting card boundary detection...")
+        trimmed_path = trim_image_with_boundary_detection(processed_path, white_threshold=250)
+        
+        if trimmed_path == processed_path:
+            print(f"⚠️ Initial boundary detection failed, trying conservative threshold...")
+            trimmed_path = trim_image_with_boundary_detection(processed_path, white_threshold=252)
+            
             if trimmed_path == processed_path:
-                print(f"⚠️ Both trimming methods failed, returning original image")
-                return original_image_path
+                print(f"⚠️ Boundary detection failed, falling back to DocAI...")
+                trimmed_path = trim_image_with_docai(processed_path, percent_expand=0.80)
+                
+                if trimmed_path == processed_path:
+                    print(f"⚠️ All trimming methods failed, returning processed image")
+                    return processed_path
         
         # Verify the trimmed file exists
         if not os.path.exists(trimmed_path):
             print(f"⚠️ Trimmed image not found at: {trimmed_path}")
-            return original_image_path
-            
-        # Ensure high quality output and always save as JPEG (RGB)
+            return processed_path
+        
+        # Ensure high quality output
         output_img = Image.open(trimmed_path)
         if output_img.mode != 'RGB':
             output_img = output_img.convert('RGB')
-        # Always save as .jpg
+        
         jpeg_path = os.path.splitext(trimmed_path)[0] + '.jpg'
         output_img.save(jpeg_path, format='JPEG', quality=100, optimize=True)
         print(f"✅ Image processed and saved at: {jpeg_path}")
         return jpeg_path
+        
     except Exception as e:
         print(f"❌ Error processing image: {e}")
-        return original_image_path 
+        import traceback
+        traceback.print_exc()
+        return original_image_path
+
+
+# Alias for compatibility with v2
+ensure_trimmed_image_v2 = ensure_trimmed_image

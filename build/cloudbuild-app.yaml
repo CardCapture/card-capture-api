@@ -3,8 +3,11 @@ steps:
     args:
       [
         "build",
+        "--no-cache",
         "-t",
-        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX:$BUILD_ID",
+        "-t",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX:latest",
         "-f",
         "Dockerfile",
         ".",
@@ -13,8 +16,11 @@ steps:
     args:
       [
         "build",
+        "--no-cache",
         "-t",
-        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX:$BUILD_ID",
+        "-t",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX:latest",
         "-f",
         "Dockerfile.worker",
         ".",
@@ -23,13 +29,25 @@ steps:
     args:
       [
         "push",
-        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX:$BUILD_ID",
       ]
   - name: "gcr.io/cloud-builders/docker"
     args:
       [
         "push",
-        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX:latest",
+      ]
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "push",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX:$BUILD_ID",
+      ]
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "push",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX:latest",
       ]
   - name: "gcr.io/cloud-builders/gcloud"
     args:
@@ -38,7 +56,7 @@ steps:
         "deploy",
         "$_BE_CLOUD_RUN_SERVICE",
         "--image",
-        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX:$BUILD_ID",
         "--platform",
         "managed",
         "--region",
@@ -52,7 +70,7 @@ steps:
         "deploy",
         "$_WORKER_CLOUD_RUN_SERVICE",
         "--image",
-        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX:$BUILD_ID",
         "--platform",
         "managed",
         "--region",
@@ -64,8 +82,8 @@ steps:
       ]
 
 images:
-  - "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX"
-  - "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX"
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX:$BUILD_ID"
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX:$BUILD_ID"
 
 options:
   logging: CLOUD_LOGGING_ONLY
