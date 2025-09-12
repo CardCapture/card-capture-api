@@ -14,24 +14,15 @@ import json
 
 router = APIRouter(tags=["CRM Events"])
 
-# Temporary mock user for development
-def get_mock_user():
-    return {
-        "id": "f8714b88-f5c7-404c-b4fa-2304e014a44b",
-        "school_id": "b1a2c3d4-e5f6-7890-1234-56789abcdef0",
-        "role": ["admin"],
-        "email": "kreg@cardcapture.io"
-    }
-
 @router.get("/crm-events")
-async def list_crm_events(user=Depends(get_mock_user)):
+async def list_crm_events(user=Depends(get_current_user)):
     """List all CRM events for the user's school"""
     return await list_crm_events_controller(user)
 
 @router.post("/crm-events")
 async def create_crm_event(
     payload: dict,
-    user=Depends(get_mock_user)
+    user=Depends(get_current_user)
 ):
     """Create a single CRM event"""
     return await create_crm_event_controller(user, payload)
@@ -40,7 +31,7 @@ async def create_crm_event(
 async def update_crm_event(
     event_id: str,
     payload: dict,
-    user=Depends(get_mock_user)
+    user=Depends(get_current_user)
 ):
     """Update a CRM event"""
     return await update_crm_event_controller(user, event_id, payload)
@@ -48,7 +39,7 @@ async def update_crm_event(
 @router.delete("/crm-events/bulk")
 async def bulk_delete_crm_events(
     event_ids: List[str],
-    user=Depends(get_mock_user)
+    user=Depends(get_current_user)
 ):
     """Bulk delete CRM events"""
     return await bulk_delete_crm_events_controller(user, event_ids)
@@ -56,7 +47,7 @@ async def bulk_delete_crm_events(
 @router.delete("/crm-events/{event_id}")
 async def delete_crm_event(
     event_id: str,
-    user=Depends(get_mock_user)
+    user=Depends(get_current_user)
 ):
     """Delete a single CRM event"""
     return await delete_crm_event_controller(user, event_id)
@@ -65,7 +56,7 @@ async def delete_crm_event(
 async def upload_csv(
     file: UploadFile = File(...),
     mapping: str = Form(...),
-    user=Depends(get_mock_user)
+    user=Depends(get_current_user)
 ):
     """Upload and process CSV file with column mapping"""
     if not file.filename.endswith('.csv'):
@@ -82,7 +73,7 @@ async def upload_csv(
 @router.get("/crm-events/search")
 async def search_crm_events(
     q: str,
-    user=Depends(get_mock_user)
+    user=Depends(get_current_user)
 ):
     """Search CRM events for type-ahead functionality"""
     if len(q) < 2:
