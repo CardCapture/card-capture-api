@@ -20,8 +20,8 @@ RUN apt-get update && \
 
 # Copy requirements and install dependencies  
 COPY requirements.txt .
-# Force cache bust for scipy dependency addition - aggressive busting
-RUN echo "Cache bust aggressive: 2025-09-11-$(date +%s)" > /tmp/cache_bust
+# Force cache bust for scipy dependency addition - fixed build issue
+RUN echo "Cache bust fixed: 2025-09-12-$(date +%s)" > /tmp/cache_bust
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Verify scipy installation
