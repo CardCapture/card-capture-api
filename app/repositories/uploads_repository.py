@@ -64,39 +64,32 @@ def update_job_status_with_review(
     print(f"[DATABASE DEBUG] Job ID: {job_id}")
     print(f"[DATABASE DEBUG] Status: {status}")
     
-    # 🔍 JSON VALIDATION: Check for corruption before database operations
-    critical_fields = ["cell", "date_of_birth"]
-    print(f"[DATABASE DEBUG] 🔍 JSON VALIDATION - CRITICAL FIELDS:")
+    # 🔍 IMPROVED JSON VALIDATION: Check and fix corruption before database operations
+    from app.utils.fix_json_corruption import improved_json_validation, validate_and_fix_review_data
     
     try:
-        # Serialize and deserialize to check for JSON corruption
-        import json
-        serialized = json.dumps(review_data)
-        deserialized = json.loads(serialized)
+        # Validate and potentially fix the review data
+        validation_result = improved_json_validation(review_data)
+        print(f"[DATABASE DEBUG] JSON validation result: {validation_result}")
         
-        # Check for critical fields in the JSON
-        fields_data = review_data.get('fields', {})
-        for field_name in critical_fields:
-            if field_name in fields_data:
-                field_data = fields_data[field_name]
-                print(f"[DATABASE DEBUG]   - {field_name}: value='{field_data.get('value')}', type={type(field_data.get('value'))}")
-                
-                # Check for JSON corruption indicators
-                field_str = json.dumps(field_data)
-                if '{{' in field_str or '}}' in field_str:
-                    print(f"[DATABASE DEBUG] 🚨 JSON CORRUPTION DETECTED in {field_name}: {field_str[:200]}...")
-                if field_str.count('{') != field_str.count('}'):
-                    print(f"[DATABASE DEBUG] 🚨 BRACE MISMATCH in {field_name}: {field_str.count('{')} opening vs {field_str.count('}')} closing")
-            else:
-                print(f"[DATABASE DEBUG]   - {field_name}: FIELD_NOT_FOUND")
-                
-        print(f"[DATABASE DEBUG] JSON validation passed - serialized length: {len(serialized)}")
+        if not validation_result['valid']:
+            print(f"[DATABASE DEBUG] 🚨 JSON ISSUES DETECTED: {validation_result['issues']}")
+            # Attempt to fix the data
+            try:
+                review_data = validate_and_fix_review_data(review_data)
+                print(f"[DATABASE DEBUG] ✅ JSON corruption fixed automatically")
+            except ValueError as fix_error:
+                print(f"[DATABASE DEBUG] ❌ Unable to fix JSON corruption: {fix_error}")
+                raise HTTPException(status_code=500, detail=f"Data corruption detected and cannot be fixed: {fix_error}")
+        else:
+            print(f"[DATABASE DEBUG] ✅ JSON validation passed - serialized length: {validation_result['serialized_length']}")
         
     except Exception as e:
-        print(f"[DATABASE DEBUG] 🚨 JSON VALIDATION FAILED: {str(e)}")
+        print(f"[DATABASE DEBUG] ❌ JSON VALIDATION FAILED: {str(e)}")
         # Log the raw data that's causing issues
         print(f"[DATABASE DEBUG] Raw review_data type: {type(review_data)}")
         print(f"[DATABASE DEBUG] Raw fields keys: {list(review_data.get('fields', {}).keys()) if isinstance(review_data.get('fields'), dict) else 'NOT_DICT'}")
+        raise HTTPException(status_code=500, detail=f"JSON validation failed: {str(e)}")
     
     # Update job status first
     job_response = supabase_client.table("processing_jobs").update({
