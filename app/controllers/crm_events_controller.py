@@ -200,8 +200,11 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
                 parsed_date = None
                 date_string = event_data["event_date"]
                 
-                # If it contains time, split to get just the date part
-                if ' ' in date_string:
+                # Handle ISO 8601 format with 'T' separator (e.g., 2025-09-29T18:00:00)
+                if 'T' in date_string:
+                    date_string = date_string.split('T')[0]
+                # Handle space separator (e.g., 2025-09-29 18:00:00)
+                elif ' ' in date_string:
                     date_string = date_string.split(' ')[0]
                 
                 # Try various date formats - use date() to avoid timezone issues
