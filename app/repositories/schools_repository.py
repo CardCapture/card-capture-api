@@ -8,7 +8,11 @@ from app.utils.db_utils import (
     handle_db_error
 )
 
-def get_school_by_id_db(supabase_client, school_id: str):
+def get_school_by_id_db(supabase_client, school_id: str, user_school_id: str = None):
+    # TENANT ISOLATION: Ensure user can only access their own school
+    if user_school_id and school_id != user_school_id:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your own school.")
+        
     response = supabase_client.table("schools") \
         .select("*") \
         .eq("id", school_id) \
@@ -19,17 +23,24 @@ def get_school_by_id_db(supabase_client, school_id: str):
     return response.data 
 
 @safe_db_operation("Get school settings")
-def get_school_settings_db(supabase_client, school_id: str):
-    """Get school settings with proper error handling."""
+def get_school_settings_db(supabase_client, school_id: str, user_school_id: str = None):
+    """Get school settings with proper error handling and tenant isolation."""
+    # TENANT ISOLATION: Ensure user can only access their own school
+    if user_school_id and school_id != user_school_id:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your own school settings.")
+        
     return supabase_client.table("schools").select("*").eq("id", school_id).single().execute()
 
 @ensure_atomic_updates(["schools", "field_requirements"])
-def update_school_settings_db(supabase_client, school_id: str, settings: Dict[str, Any]):
+def update_school_settings_db(supabase_client, school_id: str, settings: Dict[str, Any], user_school_id: str = None):
     """
-    Update school settings and field requirements atomically.
+    Update school settings and field requirements atomically with tenant isolation.
     If either operation fails, both are rolled back.
     """
     try:
+        # TENANT ISOLATION: Ensure user can only update their own school
+        if user_school_id and school_id != user_school_id:
+            raise HTTPException(status_code=403, detail="Access denied. You can only update your own school settings.")
         timestamp = datetime.now(timezone.utc).isoformat()
         
         # Extract field requirements from settings
@@ -76,13 +87,17 @@ def update_school_field_config_db(
     supabase_client,
     school_id: str,
     field_requirements: Dict[str, Any],
-    field_mappings: Dict[str, Any]
+    field_mappings: Dict[str, Any],
+    user_school_id: str = None
 ):
     """
-    Update school field configuration atomically across all related tables.
+    Update school field configuration atomically across all related tables with tenant isolation.
     If any operation fails, all are rolled back.
     """
     try:
+        # TENANT ISOLATION: Ensure user can only update their own school
+        if user_school_id and school_id != user_school_id:
+            raise HTTPException(status_code=403, detail="Access denied. You can only update your own school field configuration.")
         timestamp = datetime.now(timezone.utc).isoformat()
         
         # Update field requirements
@@ -136,12 +151,15 @@ def update_school_field_config_db(
         raise HTTPException(status_code=500, detail=error_details)
 
 @ensure_atomic_updates(["schools", "docai_processors"])
-def update_school_processor_db(supabase_client, school_id: str, processor_config: Dict[str, Any]):
+def update_school_processor_db(supabase_client, school_id: str, processor_config: Dict[str, Any], user_school_id: str = None):
     """
-    Update school's DocAI processor configuration atomically.
+    Update school's DocAI processor configuration atomically with tenant isolation.
     If either operation fails, both are rolled back.
     """
     try:
+        # TENANT ISOLATION: Ensure user can only update their own school
+        if user_school_id and school_id != user_school_id:
+            raise HTTPException(status_code=403, detail="Access denied. You can only update your own school processor configuration.")
         timestamp = datetime.now(timezone.utc).isoformat()
         
         # Create/update processor record
@@ -172,12 +190,15 @@ def update_school_processor_db(supabase_client, school_id: str, processor_config
         raise HTTPException(status_code=500, detail=error_details)
 
 @ensure_atomic_updates(["schools", "export_configs"])
-def update_school_export_config_db(supabase_client, school_id: str, export_config: Dict[str, Any]):
+def update_school_export_config_db(supabase_client, school_id: str, export_config: Dict[str, Any], user_school_id: str = None):
     """
-    Update school's export configuration atomically.
+    Update school's export configuration atomically with tenant isolation.
     If either operation fails, both are rolled back.
     """
     try:
+        # TENANT ISOLATION: Ensure user can only update their own school
+        if user_school_id and school_id != user_school_id:
+            raise HTTPException(status_code=403, detail="Access denied. You can only update your own school export configuration.")
         timestamp = datetime.now(timezone.utc).isoformat()
         
         # Create/update export config

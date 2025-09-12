@@ -10,6 +10,10 @@ app = FastAPI(title="Card Scanner API")
 
 register_exception_handlers(app)
 
+# Add Content-Length fix middleware to prevent protocol errors
+from app.middleware.fix_content_length_middleware import ContentLengthFixMiddleware
+app.add_middleware(ContentLengthFixMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
