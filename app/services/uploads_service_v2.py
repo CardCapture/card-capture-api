@@ -9,7 +9,7 @@ import uuid
 import time
 from fastapi.responses import JSONResponse, FileResponse
 from app.core.clients import get_supabase_client, docai_client
-from app.utils.image_processing_integrated import ensure_trimmed_image
+# from app.utils.image_processing_integrated import ensure_trimmed_image  # Removed - using original images
 from app.utils.storage import upload_to_supabase_storage_from_path
 from app.repositories.uploads_repository import (
     insert_processing_job_db,
@@ -192,9 +192,8 @@ async def upload_file_service(file, school_id, event_id, user):
             try:
                 log_debug(f"Processing image: {file.filename}", service="uploads_v2")
                 
-                # Apply PhotoRoom background removal via ensure_trimmed_image
-                # This will use PhotoRoom if enabled, otherwise fall back to boundary detection
-                processed_file_path = ensure_trimmed_image(working_file_path)
+                # Skip image trimming - use original image
+                processed_file_path = working_file_path
                 
                 log_debug(f"Image processing complete: {processed_file_path}", service="uploads_v2")
                 
@@ -305,8 +304,8 @@ async def handle_pdf_upload(pdf_path: str, original_filename: str, school_id: st
         job_ids = []
         for i, png_path in enumerate(png_paths):
             try:
-                # Process with PhotoRoom/boundary detection
-                processed_path = ensure_trimmed_image(png_path)
+                # Skip image trimming - use original PNG
+                processed_path = png_path
                 
                 # Upload to storage
                 supabase_client = get_supabase_client()
