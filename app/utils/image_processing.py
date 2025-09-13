@@ -338,10 +338,41 @@ def ensure_trimmed_image(original_image_path: str) -> str:
         if USE_PHOTOROOM:
             print(f"🎨 Attempting PhotoRoom background removal...")
             photoroom_result = process_with_photoroom(processed_path)
-            
+
             if photoroom_result and os.path.exists(photoroom_result):
-                print(f"✅ PhotoRoom processing successful")
-                return photoroom_result
+                # Validate that PhotoRoom actually changed the image
+                print(f"🔍 Validating PhotoRoom results...")
+
+                try:
+                    from PIL import Image
+                    import numpy as np
+
+                    original_img = Image.open(processed_path)
+                    photoroom_img = Image.open(photoroom_result)
+
+                    # Quick validation: check if images are significantly different
+                    if original_img.size == photoroom_img.size:
+                        # Same size - check pixel differences in background areas
+                        orig_array = np.array(original_img.resize((100, 100)))  # Resize for speed
+                        photo_array = np.array(photoroom_img.resize((100, 100)))
+
+                        # Calculate average pixel difference
+                        pixel_diff = np.mean(np.abs(orig_array.astype(float) - photo_array.astype(float)))
+
+                        print(f"📊 PhotoRoom pixel difference: {pixel_diff:.2f}")
+
+                        if pixel_diff < 5.0:  # Very similar images
+                            print(f"⚠️ PhotoRoom didn't significantly change the image (diff: {pixel_diff:.2f}), falling back to boundary detection")
+                        else:
+                            print(f"✅ PhotoRoom processing successful (diff: {pixel_diff:.2f})")
+                            return photoroom_result
+                    else:
+                        # Different sizes - PhotoRoom likely worked
+                        print(f"✅ PhotoRoom changed dimensions from {original_img.size} to {photoroom_img.size}")
+                        return photoroom_result
+
+                except Exception as validation_error:
+                    print(f"⚠️ PhotoRoom validation failed: {validation_error}, falling back to boundary detection")
             else:
                 print(f"⚠️ PhotoRoom failed or unavailable, falling back to boundary detection")
         

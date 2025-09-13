@@ -16,7 +16,7 @@ from app.pipeline.pipeline import CardProcessingPipeline
 from app.repositories.processing_jobs_repository import update_processing_job
 from app.core.clients import get_supabase_client
 from app.repositories.uploads_repository import update_job_status_with_review
-from app.utils.image_processing import ensure_trimmed_image
+# from app.utils.image_processing import ensure_trimmed_image  # Removed - no longer using image trimming
 from app.utils.storage import upload_to_supabase_storage_from_path
 from app.utils.retry_utils import log_debug
 
@@ -171,38 +171,17 @@ def process_job_v3(job: Dict[str, Any]) -> None:
             "fields_needing_review": result.metadata.get("fields_needing_review")
         }, service="worker_v3")
         
-        # Step 3: Handle image trimming and upload
-        log_debug("=== STEP 3: TRIM AND UPLOAD IMAGE ===", service="worker_v3")
-        cropped_image_path = result.metadata.get("cropped_image_path")
-        trimmed_storage_path = None
-        
-        log_debug(f"[IMAGE DEBUG] Cropped image path from pipeline: {cropped_image_path}", service="worker_v3")
-        log_debug(f"[IMAGE DEBUG] Cropped image exists: {os.path.exists(cropped_image_path) if cropped_image_path else 'N/A'}", service="worker_v3")
-        log_debug(f"[IMAGE DEBUG] Original tmp file: {tmp_file}", service="worker_v3")
-        log_debug(f"[IMAGE DEBUG] Original tmp file exists: {os.path.exists(tmp_file) if tmp_file else 'N/A'}", service="worker_v3")
-        
-        if cropped_image_path and os.path.exists(cropped_image_path):
-            # Use the cropped image from DocAI processing
-            trimmed_image_path = cropped_image_path
-            log_debug(f"[IMAGE DEBUG] Using cropped image from DocAI: {trimmed_image_path}", service="worker_v3")
-        else:
-            # Fall back to trimming the original
-            trimmed_image_path = ensure_trimmed_image(tmp_file)
-            log_debug(f"[IMAGE DEBUG] Using fallback trimmed image: {trimmed_image_path}", service="worker_v3")
-        
-        log_debug(f"[IMAGE DEBUG] Final trimmed image path: {trimmed_image_path}", service="worker_v3")
-        log_debug(f"[IMAGE DEBUG] Final trimmed image exists: {os.path.exists(trimmed_image_path) if trimmed_image_path else 'N/A'}", service="worker_v3")
-        
-        try:
-            trimmed_storage_path = upload_to_supabase_storage_from_path(
-                supabase_client,
-                trimmed_image_path,
-                user_id,
-                os.path.basename(trimmed_image_path)
-            )
-            log_debug(f"[IMAGE DEBUG] ✅ Trimmed image uploaded to storage: {trimmed_storage_path}", service="worker_v3")
-        except Exception as e:
-            log_debug(f"[IMAGE DEBUG] ❌ Failed to upload trimmed image: {e}", service="worker_v3")
+        # Step 3: Skip image trimming - use original image directly
+        log_debug("=== STEP 3: USING ORIGINAL IMAGE (SKIPPING TRIMMING) ===", service="worker_v3")
+
+        # Use the original uploaded image path directly
+        original_image_path = job.get("image_path")
+        log_debug(f"[IMAGE DEBUG] Using original image path directly: {original_image_path}", service="worker_v3")
+
+        # Set trimmed_storage_path to the same as original for now
+        # This ensures the UI can still pull from trimmed_image_path column
+        trimmed_storage_path = original_image_path
+        log_debug(f"[IMAGE DEBUG] ✅ Using original image as 'trimmed' image: {trimmed_storage_path}", service="worker_v3")
         
         # Step 4: Save results to database
         log_debug("=== STEP 4: SAVE TO DATABASE ===", service="worker_v3")
@@ -289,13 +268,11 @@ def process_job_v3(job: Dict[str, Any]) -> None:
         raise
         
     finally:
-        # Cleanup temporary files
+        # Cleanup temporary files (only the downloaded temp file now)
         cleanup_files = []
         if tmp_file and os.path.exists(tmp_file):
             cleanup_files.append(tmp_file)
-        if trimmed_image_path and os.path.exists(trimmed_image_path) and trimmed_image_path != tmp_file:
-            cleanup_files.append(trimmed_image_path)
-        
+
         for file_path in cleanup_files:
             try:
                 os.remove(file_path)
