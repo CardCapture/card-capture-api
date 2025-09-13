@@ -181,14 +181,11 @@ def process_job_v3(job: Dict[str, Any]) -> None:
         log_debug(f"[IMAGE DEBUG] Original tmp file: {tmp_file}", service="worker_v3")
         log_debug(f"[IMAGE DEBUG] Original tmp file exists: {os.path.exists(tmp_file) if tmp_file else 'N/A'}", service="worker_v3")
         
-        if cropped_image_path and os.path.exists(cropped_image_path):
-            # Use the cropped image from DocAI processing
-            trimmed_image_path = cropped_image_path
-            log_debug(f"[IMAGE DEBUG] Using cropped image from DocAI: {trimmed_image_path}", service="worker_v3")
-        else:
-            # Fall back to trimming the original
-            trimmed_image_path = ensure_trimmed_image(tmp_file)
-            log_debug(f"[IMAGE DEBUG] Using fallback trimmed image: {trimmed_image_path}", service="worker_v3")
+        # Always use ensure_trimmed_image for proper background removal (PhotoRoom first, then fallbacks)
+        # This ensures cards from cell phones get proper background removal
+        log_debug(f"[IMAGE DEBUG] Processing image through full trimming pipeline (PhotoRoom -> Boundary -> DocAI)", service="worker_v3")
+        trimmed_image_path = ensure_trimmed_image(tmp_file)
+        log_debug(f"[IMAGE DEBUG] Trimmed image path: {trimmed_image_path}", service="worker_v3")
         
         log_debug(f"[IMAGE DEBUG] Final trimmed image path: {trimmed_image_path}", service="worker_v3")
         log_debug(f"[IMAGE DEBUG] Final trimmed image exists: {os.path.exists(trimmed_image_path) if trimmed_image_path else 'N/A'}", service="worker_v3")

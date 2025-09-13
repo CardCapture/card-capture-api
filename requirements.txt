@@ -38,6 +38,7 @@ packaging==25.0
 paramiko==3.5.1
 pdf2image==1.17.0
 pillow==11.2.1
+pillow_heif==1.1.0
 postgrest>=0.14.0
 proto-plus==1.26.1
 psutil==6.1.1
