@@ -5,7 +5,7 @@ import uuid
 import time
 from fastapi.responses import JSONResponse, FileResponse
 from app.core.clients import get_supabase_client, docai_client
-# from app.utils.image_processing import ensure_trimmed_image  # Removed - using original images
+from app.utils.image_processing import ensure_proper_orientation  # Import only orientation handling
 from app.utils.storage import upload_to_supabase_storage_from_path
 from app.repositories.uploads_repository import (
     insert_processing_job_db,
@@ -182,12 +182,12 @@ async def upload_file_service(file, school_id, event_id, user):
             compressed_file_path = None
             try:
                 log_debug(f"Processing image: {file.filename}", service="uploads")
-                
-                # Skip image trimming - use original image
-                processed_file_path = working_file_path
-                
-                log_debug(f"Image processing complete: {processed_file_path}", service="uploads")
-                
+
+                # Apply EXIF orientation (without trimming)
+                processed_file_path = ensure_proper_orientation(working_file_path)
+
+                log_debug(f"Image orientation corrected: {processed_file_path}", service="uploads")
+
                 # Open the processed image for final optimization
                 with Image.open(processed_file_path) as img:
                     # Convert to RGB if necessary
@@ -302,10 +302,10 @@ async def handle_pdf_upload(pdf_path: str, original_filename: str, school_id: st
         try:
             for i, png_path in enumerate(png_paths):
                 log_debug(f"Processing page {i+1}: {png_path}", service="uploads")
-                
-                # Skip image trimming - use original PNG
-                processed_path = png_path
-                
+
+                # Apply EXIF orientation to PNG (in case PDF contains rotated images)
+                processed_path = ensure_proper_orientation(png_path)
+
                 # Convert processed image to optimized JPG
                 with Image.open(processed_path) as img:
                     # Convert to RGB if necessary
