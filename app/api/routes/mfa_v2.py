@@ -543,23 +543,40 @@ async def verify_mfa(
                     .eq('user_id', user_id) \
                     .eq('device_token_hash', current_token_hash) \
                     .execute()
-                
+
+                print(f"[MFA Verify] Found existing device records: {len(existing_device.data)}")
+
                 if existing_device.data:
                     device = existing_device.data[0]
                     try:
-                        device_expires_at = datetime.fromisoformat(device['expires_at'].replace('Z', '+00:00'))
-                        if device_expires_at > datetime.now(timezone.utc):
+                        # Parse timestamp with better error handling
+                        timestamp_str = device['expires_at']
+                        try:
+                            device_expires_at = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                        except ValueError:
+                            from dateutil import parser
+                            device_expires_at = parser.parse(timestamp_str)
+
+                        # Ensure timezone-aware comparison
+                        if device_expires_at.tzinfo is None:
+                            device_expires_at = device_expires_at.replace(tzinfo=timezone.utc)
+
+                        current_time = datetime.now(timezone.utc)
+                        print(f"[MFA Verify] Device expiry: {device_expires_at.isoformat()}, Current time: {current_time.isoformat()}")
+
+                        if device_expires_at > current_time:
                             # Current token is still valid, just extend its expiry
-                            print(f"[MFA Verify] Current device token is valid, extending expiry")
+                            print(f"[MFA Verify] Current device token is valid, extending expiry by 30 days")
                             device_token_to_use = current_device_token
-                            
+
                             # Update expiry date
-                            get_supabase_client().table('trusted_devices').update({
+                            update_result = get_supabase_client().table('trusted_devices').update({
                                 'expires_at': expires_at.isoformat(),
                                 'updated_at': datetime.now(timezone.utc).isoformat()
                             }).eq('user_id', user_id).eq('device_token_hash', current_token_hash).execute()
+                            print(f"[MFA Verify] Updated device token expiry: success")
                         else:
-                            print(f"[MFA Verify] Current device token expired, generating new one")
+                            print(f"[MFA Verify] Current device token expired ({device_expires_at} < {current_time}), generating new one")
                     except Exception as date_error:
                         print(f"[MFA Verify] Error parsing device expiry: {date_error}")
             
@@ -659,14 +676,28 @@ async def check_device_trust(
             # Try direct parsing first
             expires_at = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
         except ValueError:
-            # Handle microseconds precision issues
-            import re
-            # Remove extra precision beyond 6 digits for microseconds
-            timestamp_str = re.sub(r'\.(\d{6})\d*([+-]\d{2}:\d{2})$', r'.\1\2', timestamp_str)
-            expires_at = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-        
-        if expires_at < datetime.now(timezone.utc):
+            try:
+                # Handle microseconds precision issues
+                import re
+                # Remove extra precision beyond 6 digits for microseconds
+                timestamp_str = re.sub(r'\.(\d{6})\d*([+-]\d{2}:\d{2})$', r'.\1\2', timestamp_str)
+                expires_at = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            except ValueError:
+                # If all else fails, try parsing without microseconds
+                from dateutil import parser
+                expires_at = parser.parse(timestamp_str)
+
+        # Ensure both datetimes are timezone-aware for proper comparison
+        current_time = datetime.now(timezone.utc)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        print(f"[Device Trust] Expiry check - expires_at: {expires_at.isoformat()}, current_time: {current_time.isoformat()}")
+        print(f"[Device Trust] Is expired: {expires_at < current_time}")
+
+        if expires_at < current_time:
             # Token expired
+            print(f"[Device Trust] Token expired")
             return JSONResponse(content={"trusted": False, "expired": True})
         
         return JSONResponse(content={"trusted": True})
