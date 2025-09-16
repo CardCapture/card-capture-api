@@ -1,12 +1,13 @@
 """
-Worker V3 - New pipeline implementation
+Worker V3 - New pipeline implementation with race condition fixes
 """
 import os
 import time
 import tempfile
 import traceback
-from datetime import datetime, timezone
-from typing import Dict, Any
+import hashlib
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,32 +39,38 @@ pipeline = CardProcessingPipeline()
 BUCKET = "cards-uploads"
 MAX_RETRIES = 3
 SLEEP_SECONDS = 1
+STALE_JOB_MINUTES = 5
 
 
 @app.on_event("startup")
 async def startup_event():
     """Log when the app starts up"""
-    print("🚀 CardCapture Worker API V3 is starting up...", flush=True)
+    print("🚀 CardCapture Worker API V3 (Race Condition Fixed) is starting up...", flush=True)
     print(f"🌐 Environment: PORT={os.environ.get('PORT', 'NOT_SET')}", flush=True)
     try:
         from app.core.clients import get_supabase_client
         supabase_client = get_supabase_client()
         print("✅ Supabase client imported and initialized successfully", flush=True)
-        print("✅ New pipeline system loaded", flush=True)
-        print("✅ CardCapture Worker API V3 startup complete", flush=True)
+        print("✅ New pipeline system loaded with race condition fixes", flush=True)
+        print("✅ CardCapture Worker API V3 (Fixed) startup complete", flush=True)
     except Exception as e:
         print(f"⚠️ Startup dependency check failed (continuing): {e}", flush=True)
 
 
 @app.get("/")
 def root():
-    return {"message": "CardCapture Worker API V3 is running", "version": "v3", "pipeline": "new"}
+    return {
+        "message": "CardCapture Worker API V3 (Race Condition Fixed) is running",
+        "version": "v3-fixed",
+        "pipeline": "new",
+        "features": ["atomic-job-claiming", "duplicate-detection", "retry-protection"]
+    }
 
 
 @app.get("/health")
 def health_check():
     """Health check endpoint for Cloud Run"""
-    return {"status": "healthy", "service": "card-capture-worker-v3", "version": "v3"}
+    return {"status": "healthy", "service": "card-capture-worker-v3-fixed", "version": "v3-fixed"}
 
 
 @app.get("/ready")
@@ -73,9 +80,9 @@ def readiness_check():
         from app.core.clients import get_supabase_client
         supabase_client = get_supabase_client()
         return {
-            "status": "ready", 
-            "service": "card-capture-worker-v3",
-            "version": "v3",
+            "status": "ready",
+            "service": "card-capture-worker-v3-fixed",
+            "version": "v3-fixed",
             "pipeline": "new",
             "dependencies": {
                 "supabase": "connected",
@@ -85,10 +92,59 @@ def readiness_check():
         }
     except Exception as e:
         return {
-            "status": "not_ready", 
-            "service": "card-capture-worker-v3",
+            "status": "not_ready",
+            "service": "card-capture-worker-v3-fixed",
             "error": str(e)
         }
+
+
+def calculate_image_hash(file_path: str) -> Optional[str]:
+    """Calculate SHA-256 hash of image file for deduplication"""
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    except Exception as e:
+        log_debug(f"Error calculating image hash: {e}", service="worker_v3")
+        return None
+
+
+def mark_job_permanently_failed(job_id: str, error_message: str):
+    """Mark job as permanently failed after max retries"""
+    try:
+        supabase_client = get_supabase_client()
+        update_processing_job(supabase_client, job_id, {
+            "status": "permanently_failed",
+            "error_message": error_message,
+            "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
+        log_debug(f"Job {job_id} marked as permanently failed: {error_message}", service="worker_v3")
+    except Exception as e:
+        log_debug(f"Error marking job as permanently failed: {e}", service="worker_v3")
+
+
+def handle_job_failure(supabase_client, job: Dict[str, Any], error_message: str):
+    """Handle job failure with retry logic"""
+    job_id = job['id']
+    retry_count = job.get('retry_count', 0)
+
+    if retry_count < MAX_RETRIES - 1:
+        # Reset to queued for retry
+        update_processing_job(supabase_client, job_id, {
+            "status": "queued",
+            "worker_id": None,
+            "claimed_at": None,
+            "retry_count": retry_count + 1,
+            "error_message": f"Attempt {retry_count + 1} failed: {error_message}",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
+        log_debug(f"Job {job_id} reset to queued for retry (attempt {retry_count + 2}/{MAX_RETRIES})", service="worker_v3")
+    else:
+        # Mark as permanently failed
+        mark_job_permanently_failed(job_id, f"Failed after {MAX_RETRIES} attempts: {error_message}")
 
 
 def download_from_supabase(file_url: str, local_path: str) -> None:
@@ -119,30 +175,30 @@ def download_from_supabase(file_url: str, local_path: str) -> None:
 
 
 def process_job_v3(job: Dict[str, Any]) -> None:
-    """
-    New simplified job processor using the pipeline system.
-    
-    Much cleaner than the old 12-step process!
-    """
+    """Process job with duplicate detection and retry protection"""
     job_id = job["id"]
+    retry_count = job.get("retry_count", 0)
+
+    # Extract job parameters
     file_url = job["file_url"]
     user_id = job["user_id"]
     school_id = job["school_id"]
     event_id = job.get("event_id")
-    
-    log_debug("🔍🔍🔍 CRITICAL: PROCESS_JOB_V3 CALLED 🔍🔍🔍", {
+
+    log_debug(f"=== PROCESSING JOB V3 START ===", {
         "job_id": job_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "caller": "Check stack trace to see who called this"
-    }, service="worker_v3")
-    
-    log_debug("=== PROCESSING JOB V3 START ===", {
-        "job_id": job_id,
+        "retry_count": retry_count,
         "user_id": user_id,
         "school_id": school_id,
         "event_id": event_id,
         "file_url": file_url
     }, service="worker_v3")
+
+    # Check retry limit
+    if retry_count >= MAX_RETRIES:
+        log_debug(f"Job {job_id} exceeded max retries ({MAX_RETRIES})", service="worker_v3")
+        mark_job_permanently_failed(job_id, f"Exceeded {MAX_RETRIES} retry attempts")
+        return
     
     supabase_client = get_supabase_client()
     tmp_file = None
@@ -154,7 +210,39 @@ def process_job_v3(job: Dict[str, Any]) -> None:
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_url)[1] or '.png') as tmp:
             tmp_file = tmp.name
         download_from_supabase(file_url, tmp_file)
-        
+
+        # Step 1.5: Check for duplicate processing using image hash
+        image_hash = calculate_image_hash(tmp_file)
+        if image_hash:
+            dup_check = supabase_client.rpc(
+                'check_duplicate_job',
+                {
+                    'p_image_hash': image_hash,
+                    'p_event_id': event_id,
+                    'p_window_minutes': 10
+                }
+            ).execute()
+
+            if dup_check.data and len(dup_check.data) > 0 and dup_check.data[0].get('is_duplicate'):
+                existing_job_id = dup_check.data[0].get('existing_job_id')
+                log_debug(f"Duplicate job detected for {job_id}, skipping processing", {
+                    "existing_job_id": existing_job_id,
+                    "image_hash": image_hash[:8] + "..."
+                }, service="worker_v3")
+
+                # Mark this job as duplicate and return early
+                update_processing_job(supabase_client, job_id, {
+                    "status": "skipped_duplicate",
+                    "error_message": f"Duplicate of job {existing_job_id}",
+                    "image_hash": image_hash,
+                    "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                })
+                return
+
+            # Update job with image hash for future duplicate detection
+            update_processing_job(supabase_client, job_id, {"image_hash": image_hash})
+
         # Step 2: Run the pipeline (this is the magic!)
         log_debug("=== STEP 2: RUN PIPELINE ===", service="worker_v3")
         result = pipeline.process(
@@ -286,40 +374,48 @@ def process_job_v3(job: Dict[str, Any]) -> None:
 
 
 def main_v3():
-    """
-    Main worker loop for V3 pipeline
-    """
-    log_debug("Starting CardCapture processing worker V3...", service="worker_v3")
-    
-    try:
-        log_debug("=== CHECKING FOR QUEUED JOBS ===", service="worker_v3")
-        
-        # Get next queued job
-        supabase_client = get_supabase_client()
-        jobs = supabase_client.table("processing_jobs").select("*").eq("status", "queued").order("created_at").limit(1).execute()
-        
-        if jobs.data and len(jobs.data) > 0:
-            job = jobs.data[0]
-            log_debug(f"Found job {job['id']} to process", service="worker_v3")
-            
-            # Mark job as processing
-            now = datetime.now(timezone.utc).isoformat()
-            update_processing_job(supabase_client, job["id"], {
-                "status": "processing",
-                "updated_at": now
-            })
-            
-            # Process the job
-            process_job_v3(job)
-            
-        else:
-            log_debug("No queued jobs found, sleeping...", service="worker_v3")
+    """Main worker loop for V3 pipeline with atomic job claiming"""
+    worker_id = f"worker-{os.getpid()}-{datetime.now().timestamp()}"
+    log_debug(f"Starting CardCapture processing worker V3 with ID: {worker_id}", service="worker_v3")
+
+    while True:
+        try:
+            log_debug("=== CHECKING FOR QUEUED JOBS ===", service="worker_v3")
+
+            # Get Supabase client
+            supabase_client = get_supabase_client()
+
+            # Atomically claim next job using RPC function
+            result = supabase_client.rpc(
+                'claim_next_job',
+                {
+                    'p_worker_id': worker_id,
+                    'p_stale_minutes': STALE_JOB_MINUTES
+                }
+            ).execute()
+
+            if result.data and len(result.data) > 0:
+                job = result.data[0]
+                log_debug(f"Successfully claimed job {job['id']}", {
+                    "worker_id": worker_id,
+                    "retry_count": job.get('retry_count', 0)
+                }, service="worker_v3")
+
+                # Process the job normally
+                try:
+                    process_job_v3(job)
+                except Exception as e:
+                    log_debug(f"Job processing failed: {str(e)}", service="worker_v3")
+                    # The existing error handling in process_job_v3 will handle retries
+
+            else:
+                log_debug("No queued jobs found, sleeping...", service="worker_v3")
+                time.sleep(SLEEP_SECONDS)
+
+        except Exception as e:
+            log_debug(f"Worker error: {str(e)}", service="worker_v3")
+            log_debug("Worker traceback", traceback.format_exc(), service="worker_v3")
             time.sleep(SLEEP_SECONDS)
-            
-    except Exception as e:
-        log_debug(f"Worker error: {str(e)}", service="worker_v3")
-        log_debug("Worker traceback", traceback.format_exc(), service="worker_v3")
-        time.sleep(SLEEP_SECONDS)
 
 
 @app.get("/process")
