@@ -211,37 +211,9 @@ def process_job_v3(job: Dict[str, Any]) -> None:
             tmp_file = tmp.name
         download_from_supabase(file_url, tmp_file)
 
-        # Step 1.5: Check for duplicate processing using image hash
-        image_hash = calculate_image_hash(tmp_file)
-        if image_hash:
-            dup_check = supabase_client.rpc(
-                'check_duplicate_job',
-                {
-                    'p_image_hash': image_hash,
-                    'p_event_id': event_id,
-                    'p_window_minutes': 10
-                }
-            ).execute()
-
-            if dup_check.data and len(dup_check.data) > 0 and dup_check.data[0].get('is_duplicate'):
-                existing_job_id = dup_check.data[0].get('existing_job_id')
-                log_debug(f"Duplicate job detected for {job_id}, skipping processing", {
-                    "existing_job_id": existing_job_id,
-                    "image_hash": image_hash[:8] + "..."
-                }, service="worker_v3")
-
-                # Mark this job as duplicate and return early
-                update_processing_job(supabase_client, job_id, {
-                    "status": "skipped_duplicate",
-                    "error_message": f"Duplicate of job {existing_job_id}",
-                    "image_hash": image_hash,
-                    "processing_completed_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                })
-                return
-
-            # Update job with image hash for future duplicate detection
-            update_processing_job(supabase_client, job_id, {"image_hash": image_hash})
+        # REMOVED: Duplicate detection was masking the real problem
+        # The frontend is reusing the same image file for multiple scans
+        # We need to fix the root cause, not add complexity to handle symptoms
 
         # Step 2: Run the pipeline (this is the magic!)
         log_debug("=== STEP 2: RUN PIPELINE ===", service="worker_v3")

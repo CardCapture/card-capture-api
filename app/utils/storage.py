@@ -10,10 +10,12 @@ def upload_to_supabase_storage_from_path(supabase_client, trimmed_path: str, use
     print(f"[STORAGE DEBUG] Original filename: {original_filename}")
     print(f"[STORAGE DEBUG] File exists: {os.path.exists(trimmed_path) if trimmed_path else 'N/A'}")
     
-    # Use the original filename to overwrite the existing image
-    # This ensures the UI can show the processed version at the same path
+    # Generate unique filename to prevent overwrites
+    # Each upload gets its own unique path
     today = datetime.now().strftime('%Y-%m-%d')
-    storage_path = f"cards-uploads/{user_id}/{today}/{original_filename}"
+    file_extension = os.path.splitext(original_filename)[1] or '.jpg'
+    unique_filename = f"{uuid.uuid4().hex}{file_extension}"
+    storage_path = f"cards-uploads/{user_id}/{today}/{unique_filename}"
     
     print(f"[STORAGE DEBUG] Generated storage path: {storage_path}")
     
@@ -29,11 +31,11 @@ def upload_to_supabase_storage_from_path(supabase_client, trimmed_path: str, use
         
         print(f"[STORAGE DEBUG] File size: {len(trimmed_bytes)} bytes")
         
-        # Use upsert to overwrite existing file with processed version
+        # Upload the file with unique path
         res = supabase_client.storage.from_('cards-uploads').upload(
             storage_path.replace('cards-uploads/', ''),
             trimmed_bytes,
-            {"content-type": content_type, "upsert": "true"}
+            {"content-type": content_type}
         )
         
         if hasattr(res, 'error') and res.error:
