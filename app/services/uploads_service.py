@@ -574,7 +574,24 @@ async def export_to_slate_service(payload: dict):
                         field_keys.extend(["first_name", "last_name"])
                     else:
                         field_keys.append(field_key)
-        
+
+        # Always ensure CEEB code is included for Slate exports (after high_school if it exists)
+        # This is critical for Slate imports and should always be present
+        if "ceeb_code" not in field_keys:
+            # Find the position of high_school field if it exists
+            high_school_index = -1
+            for i, key in enumerate(field_keys):
+                if key == "high_school":
+                    high_school_index = i
+                    break
+
+            if high_school_index != -1:
+                # Insert ceeb_code right after high_school
+                field_keys.insert(high_school_index + 1, "ceeb_code")
+            else:
+                # Add ceeb_code before additional fields
+                field_keys.append("ceeb_code")
+
         # Add common fields that might not be in card_fields but are useful for export
         additional_fields = ["event_name", "slate_event_id", "date_created"]
         for field in additional_fields:
@@ -614,7 +631,9 @@ async def export_to_slate_service(payload: dict):
                 # Three or more parts - first name is first part, last name is everything else
                 return {"first_name": name_parts[0], "last_name": " ".join(name_parts[1:])}
         
-        writer = csv.DictWriter(csv_content, fieldnames=headers)
+        # Use QUOTE_MINIMAL to only quote fields when necessary (contains delimiter, quote, or newline)
+        # This matches the frontend behavior and prevents unnecessary quotes that break Slate imports
+        writer = csv.DictWriter(csv_content, fieldnames=headers, quoting=csv.QUOTE_MINIMAL)
         writer.writeheader()
         
         # Track document_ids for marking as exported
