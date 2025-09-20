@@ -210,16 +210,17 @@ def find_addresses_in_zip(house_number: str, zip_code: str, city: str, state: st
         
         log_debug("Searching for addresses", {"query": search_query}, service="smart_address")
         
-        # Try Places API text search within zip bounds, but fall back gracefully
-        try:
-            places_result = gmaps_client.places(
-                query=search_query,
-                location=zip_bounds['center'],
-                radius=zip_bounds['radius']
-            )
-        except Exception as places_error:
-            log_debug(f"Places API failed: {places_error}", service="smart_address")
-            places_result = None
+        # DISABLED: Places API is too expensive ($32 per 1000 requests)
+        # Using geocode API instead which is much cheaper ($5 per 1000 requests)
+        # try:
+        #     places_result = gmaps_client.places(
+        #         query=search_query,
+        #         location=zip_bounds['center'],
+        #         radius=zip_bounds['radius']
+        #     )
+        # except Exception as places_error:
+        #     log_debug(f"Places API failed: {places_error}", service="smart_address")
+        places_result = None  # Always skip Places API
         
         candidates = []
         if places_result and 'results' in places_result:
