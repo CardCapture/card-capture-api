@@ -189,7 +189,7 @@ class RateLimiter:
 
 
 # Rate limiter instances for different endpoints
-email_start_limiter = RateLimiter(max_attempts=10, window_minutes=1)  # 10 per minute per IP
-email_hourly_limiter = RateLimiter(max_attempts=3, window_minutes=60)  # 3 per hour per email
+email_start_limiter = RateLimiter(max_attempts=20, window_minutes=1)  # 20 per minute per IP (increased for staging)
+email_hourly_limiter = RateLimiter(max_attempts=10, window_minutes=60)  # 10 per hour per email (increased for testing)
 code_verify_limiter = RateLimiter(max_attempts=20, window_minutes=1)  # 20 per minute per IP
 form_submit_limiter = RateLimiter(max_attempts=5, window_minutes=10)  # 5 per 10 minutes
