@@ -66,9 +66,17 @@ async def start_email_registration(
 ):
     """Start registration with email (magic link)"""
     try:
-        # Rate limiting
-        await email_start_limiter.check_and_record(request, "email_start", body.email)
-        await email_hourly_limiter.check_and_record(request, "email_start", body.email)
+        # Rate limiting - check both limits but only record once
+        if not await email_start_limiter.check_ip_limit(request, "email_start"):
+            await email_start_limiter.record_attempt(request, "email_start", body.email, success=False, error_reason="ip_rate_limit")
+            raise HTTPException(status_code=429, detail="Too many attempts. Please wait a few minutes and try again.")
+        
+        if not await email_hourly_limiter.check_email_limit(body.email, "email_start"):
+            await email_start_limiter.record_attempt(request, "email_start", body.email, success=False, error_reason="email_rate_limit")
+            raise HTTPException(status_code=429, detail="Too many attempts for this email. Please wait a few minutes and try again.")
+        
+        # Record single successful attempt
+        await email_start_limiter.record_attempt(request, "email_start", body.email, success=True)
         
         # CAPTCHA verification
         client_ip = request.client.host if request.client else None
