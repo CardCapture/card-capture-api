@@ -366,27 +366,30 @@ class RegistrationService:
     async def _send_registration_magic_link(self, email: str, token: str):
         """Send registration magic link email"""
         if not self.resend_api_key:
+            log_debug(f"No Resend API key configured. Manual link: {self.frontend_url}/register/verify?token={token}", service="registration")
             return
-        
+
         magic_url = f"{self.frontend_url}/register/verify?token={token}"
-        
+
         try:
             # Load the modern email template
             html_content = self._load_registration_email_template(magic_url)
-            
+
             params = {
                 "from": "CardCapture <no-reply@cardcapture.io>",
                 "to": [email],
                 "subject": "Complete your CardCapture registration",
                 "html": html_content
             }
-            
-            resend.Emails.send(params)
-            log_debug(f"Registration magic link sent to {email}", service="registration")
-            
+
+            response = resend.Emails.send(params)
+            log_debug(f"Registration magic link sent to {email}. Response ID: {response.get('id', 'unknown')}", service="registration")
+
         except Exception as e:
             log_debug(f"Failed to send registration email: {str(e)}", service="registration")
+            log_debug(f"Error type: {type(e).__name__}", service="registration")
             log_debug(f"📧 Manual registration link: {magic_url}", service="registration")
+            raise HTTPException(status_code=500, detail="Failed to send registration email")
     
     def _load_registration_email_template(self, magic_url: str) -> str:
         """Load and populate the registration email template"""
@@ -435,6 +438,7 @@ class RegistrationService:
     async def _send_confirmation_email_with_qr(self, email: str, student_id: str, token: str, qr_data_uri: str):
         """Send confirmation email with QR code"""
         if not self.resend_api_key:
+            log_debug(f"No Resend API key configured. Manual manage link: {self.frontend_url}/student-manage?token={token}", service="registration")
             return
         
         manage_url = f"{self.frontend_url}/student-manage?token={token}"
@@ -476,10 +480,6 @@ class RegistrationService:
                     <img src="cid:qrcode" alt="Your QR Code" style="width: 250px; height: 250px; border: 2px solid #e5e7eb; border-radius: 8px; padding: 10px;" />
                 </p>
                 
-                <p style="text-align: center; margin-top: 10px;">
-                    <span style="font-family: monospace; background-color: #f3f4f6; padding: 8px 12px; border-radius: 4px; font-size: 12px;">{token}</span>
-                </p>
-                
                 <h3>Manage Your Information</h3>
                 <p>You can update your information at any time using this link:</p>
                 <p><a href="{manage_url}" style="display: inline-block; padding: 12px 24px; background-color: #3B82F6; color: white; text-decoration: none; border-radius: 6px;">Manage My Profile</a></p>
@@ -497,8 +497,8 @@ class RegistrationService:
                 ]
             }
             
-            resend.Emails.send(params)
-            log_debug(f"Confirmation email with QR sent to {email}", service="registration")
+            response = resend.Emails.send(params)
+            log_debug(f"Confirmation email with QR sent to {email}. Response ID: {response.get('id', 'unknown')}", service="registration")
             
         except Exception as e:
             log_debug(f"Failed to send confirmation email: {str(e)}", service="registration")
@@ -507,6 +507,7 @@ class RegistrationService:
     async def _send_verification_email(self, email: str, student_id: str):
         """Send email verification link"""
         if not self.resend_api_key:
+            log_debug(f"No Resend API key configured for verification email", service="registration")
             return
         
         # Create verification magic link
@@ -532,8 +533,8 @@ class RegistrationService:
                 """
             }
             
-            resend.Emails.send(params)
-            log_debug(f"Verification email sent to {email}", service="registration")
+            response = resend.Emails.send(params)
+            log_debug(f"Verification email sent to {email}. Response ID: {response.get('id', 'unknown')}", service="registration")
             
         except Exception as e:
             log_debug(f"Failed to send verification email: {str(e)}", service="registration")
