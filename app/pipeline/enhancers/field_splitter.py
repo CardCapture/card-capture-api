@@ -25,13 +25,16 @@ class FieldSplitterEnhancer(FieldEnhancer):
         return "Split combined address fields into components"
     
     def enhance(self, fields: Dict[str, FieldData], context: PipelineContext) -> Dict[str, FieldData]:
-        """Split combined address fields into individual components"""
+        """Split combined fields into individual components"""
         # Make a copy to avoid modifying during iteration
         fields = dict(fields)
-        
+
         # Split address fields only (name splitting now handled by CanonicalFieldMapperEnhancer)
         fields = self._split_address_fields(fields, context)
-        
+
+        # Split academic scores into individual GPA, ACT, SAT fields
+        fields = self._split_academic_scores(fields, context)
+
         return fields
     
     def _split_address_fields(self, fields: Dict[str, FieldData], context: PipelineContext) -> Dict[str, FieldData]:
@@ -400,3 +403,83 @@ class FieldSplitterEnhancer(FieldEnhancer):
                 confidence=source_field.confidence if source_field else 0.8
             )
             log_debug(f"Split {source_key}: created zip_code = '{zip_code}'", service="pipeline")
+
+    def _split_academic_scores(self, fields: Dict[str, FieldData], context: PipelineContext) -> Dict[str, FieldData]:
+        """
+        Split academic_scores field into individual gpa, act_score, and sat_score fields.
+
+        Uses value ranges to determine which score type:
+        - GPA: 0.0-5.0 (decimal values)
+        - ACT: 1-36 (integer values)
+        - SAT: 400-1600 (integer values)
+        """
+        if 'academic_scores' not in fields or not fields['academic_scores'].value:
+            return fields
+
+        academic_field = fields['academic_scores']
+        value = str(academic_field.value).strip()
+
+        if not value:
+            return fields
+
+        log_debug(f"Splitting academic_scores field: '{value}'", service="pipeline")
+
+        # Extract all numeric values from the field
+        import re
+        # Match integers and decimals
+        number_pattern = r'\d+\.?\d*'
+        numbers = re.findall(number_pattern, value)
+
+        scores_found = {'gpa': None, 'act_score': None, 'sat_score': None}
+
+        for num_str in numbers:
+            try:
+                num = float(num_str)
+
+                # Classify based on value ranges
+                # Check for SAT first (highest range, most specific)
+                if 400 <= num <= 1600 and num == int(num):
+                    # SAT range - must be whole number
+                    if not scores_found['sat_score']:  # Only take first SAT found
+                        scores_found['sat_score'] = str(int(num))
+                        log_debug(f"Detected SAT: {int(num)}", service="pipeline")
+
+                # Check for ACT (must be whole number and in range)
+                elif 1 <= num <= 36 and num == int(num) and not ('.' in num_str):
+                    # ACT range - must be whole number (no decimal points)
+                    if not scores_found['act_score']:  # Only take first ACT found
+                        scores_found['act_score'] = str(int(num))
+                        log_debug(f"Detected ACT: {int(num)}", service="pipeline")
+
+                # Check for GPA last (lowest range, most general)
+                elif 0.0 <= num <= 5.0:
+                    # GPA range - can have decimal
+                    if not scores_found['gpa']:  # Only take first GPA found
+                        scores_found['gpa'] = num_str
+                        log_debug(f"Detected GPA: {num_str}", service="pipeline")
+
+            except ValueError:
+                log_debug(f"Could not parse number: {num_str}", service="pipeline")
+                continue
+
+        # Create individual fields for each detected score
+        # Only create fields that don't already exist or are empty
+        for field_name, score_value in scores_found.items():
+            if score_value and (field_name not in fields or not fields[field_name].value):
+                fields[field_name] = self._create_field(
+                    score_value,
+                    source_field=academic_field,
+                    source='academic_score_split',
+                    confidence=academic_field.confidence * 0.95  # Slightly lower confidence for derived field
+                )
+                log_debug(f"Created {field_name} field with value: {score_value}", service="pipeline")
+
+        # Log summary of what was extracted
+        extracted_count = sum(1 for v in scores_found.values() if v)
+        log_debug(f"Academic score splitting complete. Extracted {extracted_count} scores from: '{value}'", {
+            'gpa': scores_found['gpa'],
+            'act_score': scores_found['act_score'],
+            'sat_score': scores_found['sat_score']
+        }, service="pipeline")
+
+        return fields
