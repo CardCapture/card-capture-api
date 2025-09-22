@@ -15,123 +15,162 @@ class HighSchoolsRepository:
         return normalized
     
     def search_schools(self, query: str, limit: int = 10, state: Optional[str] = None, city: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Search high schools by name with optional state/city filter using fuzzy matching"""
+        """
+        Search high schools with multi-tier strategy:
+        1. Same-state matches (prioritized)
+        2. Exact name matches from other states
+        3. High-confidence cross-state matches
+        """
         try:
             results = []
             # Normalize the query to handle apostrophes
             normalized_query = self.normalize_text(query)
-            
-            def build_base_query():
-                """Build base query with common filters"""
+
+            def build_state_query(target_state: Optional[str] = None):
+                """Build query with optional state filter"""
                 qb = self.client.table(self.table).select(
                     "id, name, city, state, phone, website, district_name, school_type, level, ceeb_code, source"
-                ).limit(limit * 3)  # Get more results for better fuzzy matching
-                
-                if state:
-                    qb = qb.eq("state", state.upper())
-                
+                ).limit(limit * 3)
+
+                if target_state:
+                    qb = qb.eq("state", target_state.upper())
+
                 return qb
+
+            def build_base_query():
+                """Build base query without state filter for cross-state search"""
+                return self.client.table(self.table).select(
+                    "id, name, city, state, phone, website, district_name, school_type, level, ceeb_code, source"
+                ).limit(limit * 5)  # Get more results for cross-state matching
             
-            def build_city_query():
+            def build_city_query(target_state: Optional[str] = None):
                 """Build query with city filter for location-first search"""
                 qb = self.client.table(self.table).select(
                     "id, name, city, state, phone, website, district_name, school_type, level, ceeb_code, source"
                 ).limit(limit)
-                
-                if state:
-                    qb = qb.eq("state", state.upper())
+
+                if target_state:
+                    qb = qb.eq("state", target_state.upper())
                 if city:
                     qb = qb.ilike("city", f"%{city}%")
-                
+
                 return qb
-            
-            # Strategy 0: LOCATION-FIRST - If we have city info, search locally first
-            if city:
+
+            def calculate_similarity(school_name: str, query: str) -> float:
+                """Calculate similarity between school name and query"""
+                from difflib import SequenceMatcher
+                return SequenceMatcher(None, school_name.lower(), query.lower()).ratio()
+
+            def add_unique_results(new_results: List[Dict], priority_tier: int = 1):
+                """Add results if not already present, with tier information"""
+                for result in new_results:
+                    if not any(existing['id'] == result['id'] for existing in results):
+                        result['_search_tier'] = priority_tier  # Add tier info for sorting
+                        results.append(result)
+
+            # TIER 1: Same-state matches (highest priority)
+            if state:
+                # 1A: Local city matches first (if city provided)
+                if city:
+                    try:
+                        city_query = build_city_query(state)
+                        local_results = city_query.ilike("name", f"%{normalized_query}%").execute()
+                        if local_results.data:
+                            add_unique_results(local_results.data, priority_tier=1)
+                            print(f"Tier 1A: Found {len(local_results.data)} local matches in {city}, {state}")
+                    except Exception as e:
+                        print(f"Tier 1A city search failed: {e}")
+
+                # 1B: State-wide matches
                 try:
-                    city_query_builder = build_city_query()
-                    # Search with both original and normalized queries
-                    local_results = city_query_builder.ilike("name", f"%{normalized_query}%").execute()
-                    if local_results.data:
-                        results.extend(local_results.data)
-                        print(f"Found {len(local_results.data)} local matches in {city}")
+                    state_query = build_state_query(state)
+                    state_results = state_query.ilike("name", f"%{normalized_query}%").execute()
+                    if state_results.data:
+                        add_unique_results(state_results.data, priority_tier=1)
+                        print(f"Tier 1B: Found {len(state_results.data)} state matches in {state}")
+
+                    # Try original query if different
+                    if query != normalized_query:
+                        state_query_orig = build_state_query(state)
+                        state_results_orig = state_query_orig.ilike("name", f"%{query}%").execute()
+                        if state_results_orig.data:
+                            add_unique_results(state_results_orig.data, priority_tier=1)
                 except Exception as e:
-                    print(f"City-first search failed: {e}")
-                    pass
-            
-            # Strategy 1: Direct substring match (skip if we already have good local results)
-            if len(results) < limit:
+                    print(f"Tier 1B state search failed: {e}")
+
+            # TIER 2: Exact name matches from other states (if we need more results)
+            if len([r for r in results if r.get('_search_tier', 1) == 1]) < limit:
                 try:
-                    query_builder = build_base_query()
-                    # Try normalized query first
-                    direct_results = query_builder.ilike("name", f"%{normalized_query}%").execute()
-                    # Add results that aren't already in our list
-                    for result in (direct_results.data or []):
-                        if not any(existing['id'] == result['id'] for existing in results):
-                            results.append(result)
-                    
-                    # If normalized query didn't find enough results and original query is different, try original too
-                    if len(results) < limit and query != normalized_query:
-                        query_builder = build_base_query()
-                        original_results = query_builder.ilike("name", f"%{query}%").execute()
-                        for result in (original_results.data or []):
-                            if not any(existing['id'] == result['id'] for existing in results):
-                                results.append(result)
+                    # Search nationwide for exact matches
+                    exact_query = build_base_query()
+                    exact_results = exact_query.ilike("name", f"%{normalized_query}%").execute()
+
+                    if exact_results.data:
+                        # Filter for high-similarity matches from other states
+                        for result in exact_results.data:
+                            if result['state'] != (state or '').upper():  # Different state
+                                similarity = calculate_similarity(result['name'], normalized_query)
+                                if similarity >= 0.85:  # High similarity threshold
+                                    if not any(existing['id'] == result['id'] for existing in results):
+                                        result['_search_tier'] = 2  # Cross-state match
+                                        result['_similarity'] = similarity
+                                        results.append(result)
+
+                        print(f"Tier 2: Found cross-state exact matches")
                 except Exception as e:
-                    print(f"Strategy 1 failed: {e}")
-                    pass
-            
-            # Strategy 2: Search for individual words if query contains multiple words (but limit results)
-            if len(normalized_query.split()) > 1 and len(results) < limit:
+                    print(f"Tier 2 exact match search failed: {e}")
+
+            # TIER 3: Word-based matches for broader coverage
+            if len(results) < limit and len(normalized_query.split()) > 1:
                 words = [word.strip() for word in normalized_query.split() if len(word.strip()) > 2]
-                # Reverse the order - often the most specific word is later in the query
-                for word in reversed(words[:2]):  # Limit to 2 most significant words
-                    if len(results) >= limit * 2:  # Don't add too many results
+                # Focus on most significant words (often school-specific terms come last)
+                for word in reversed(words[:2]):
+                    if len(results) >= limit * 2:
                         break
                     try:
-                        query_builder = build_base_query() 
-                        word_results = query_builder.ilike("name", f"%{word}%").limit(5).execute()  # Limit each word search
-                        if word_results.data:
-                            added_count = 0
-                            for result in word_results.data:
-                                # Avoid duplicates and limit additions
-                                if not any(existing['id'] == result['id'] for existing in results) and added_count < 3:
-                                    results.append(result)
-                                    added_count += 1
+                        # First try same-state word matches
+                        if state:
+                            word_query = build_state_query(state)
+                            word_results = word_query.ilike("name", f"%{word}%").limit(3).execute()
+                            if word_results.data:
+                                add_unique_results(word_results.data, priority_tier=3)
+
+                        # Then try cross-state word matches (lower priority)
+                        cross_word_query = build_base_query()
+                        cross_word_results = cross_word_query.ilike("name", f"%{word}%").limit(2).execute()
+                        if cross_word_results.data:
+                            for result in cross_word_results.data:
+                                if result['state'] != (state or '').upper():
+                                    similarity = calculate_similarity(result['name'], normalized_query)
+                                    if similarity >= 0.7:  # Lower threshold for word matches
+                                        if not any(existing['id'] == result['id'] for existing in results):
+                                            result['_search_tier'] = 4  # Cross-state word match
+                                            result['_similarity'] = similarity
+                                            results.append(result)
                     except Exception as e:
                         continue
-            
-            # Strategy 3: If we have a city name in the query, try searching by city + school keywords
-            # Look for common city-school patterns like "City School", "City High"
-            normalized_lower = normalized_query.lower()
-            potential_city = None
-            
-            # Extract potential city name if pattern matches
-            if 'high' in normalized_lower or 'school' in normalized_lower:
-                words = normalized_query.split()
-                if len(words) >= 2:
-                    # Try first word as potential city name
-                    potential_city = words[0]
-                    
-            if potential_city and len(potential_city) > 3:
-                try:
-                    query_builder = build_base_query()
-                    city_results = query_builder.ilike("city", f"%{potential_city}%").execute()
-                    if city_results.data:
-                        for result in city_results.data:
-                            if not any(existing['id'] == result['id'] for existing in results):
-                                results.append(result)
-                except Exception as e:
-                    pass
-            
-            # Remove duplicates and limit results
+
+            # Sort results by tier (1=same state, 2=cross-state exact, 3=same state word, 4=cross-state word)
+            # Within each tier, maintain original order (which favors exact matches)
+            def sort_key(result):
+                tier = result.get('_search_tier', 1)
+                similarity = result.get('_similarity', 1.0)
+                return (tier, -similarity)  # Lower tier first, higher similarity first within tier
+
+            results.sort(key=sort_key)
+
+            # Clean up temporary fields and remove duplicates
             unique_results = []
             seen_ids = set()
             for result in results:
                 if result['id'] not in seen_ids:
+                    # Remove internal fields
+                    result.pop('_search_tier', None)
+                    result.pop('_similarity', None)
                     unique_results.append(result)
                     seen_ids.add(result['id'])
-                    
-            # Don't sort - keep results in order of relevance (direct matches first)
+
+            print(f"Final results: {len(unique_results)} schools found for '{query}'")
             return unique_results[:limit]
             
         except Exception as e:
