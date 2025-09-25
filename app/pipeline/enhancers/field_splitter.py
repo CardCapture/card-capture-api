@@ -68,6 +68,12 @@ class FieldSplitterEnhancer(FieldEnhancer):
                             source_field=fields['address'],
                             source_key='address'
                         )
+
+                        # IMPORTANT: Update the address field to only contain the street address
+                        # Remove the city, state, zip portion from the address
+                        street_address_only = parts[0].strip()
+                        fields['address'].value = street_address_only
+                        log_debug(f"Updated address field to street only: '{street_address_only}'", service="pipeline")
                         log_debug(f"Extracted from full address: city='{city}', state='{state}', zip='{zip_code or 'None'}'", service="pipeline")
 
         # List of combined fields to check (city/state/zip combinations without street address)
