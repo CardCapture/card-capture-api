@@ -76,6 +76,7 @@ class PipelineContext:
     user_id: str
     event_id: Optional[str]
     image_path: str
+    original_storage_path: Optional[str] = None
     valid_majors: List[str] = field(default_factory=list)
     field_requirements: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -88,6 +89,7 @@ class PipelineContext:
             user_id=self.user_id,
             event_id=self.event_id,
             image_path=self.image_path,
+            original_storage_path=self.original_storage_path,
             valid_majors=self.valid_majors,
             field_requirements=self.field_requirements,
             metadata=new_metadata

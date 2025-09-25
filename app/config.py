@@ -12,6 +12,7 @@ else:
 GOOGLE_PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID", "878585200500")
 DOCAI_LOCATION = os.getenv("DOCAI_LOCATION", "us")
 DOCAI_PROCESSOR_ID = os.getenv("DOCAI_PROCESSOR_ID", "894b9758c2215ed6")
+GOOGLE_OCR_PROCESSOR = os.getenv("GOOGLE_OCR_PROCESSOR")  # Enterprise OCR for rotation correction
 MIME_TYPE = "image/png"
 
 # Supabase Configuration
