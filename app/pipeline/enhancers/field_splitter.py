@@ -40,8 +40,37 @@ class FieldSplitterEnhancer(FieldEnhancer):
     def _split_address_fields(self, fields: Dict[str, FieldData], context: PipelineContext) -> Dict[str, FieldData]:
         """
         Split combined address fields like city_state_zip into components.
+        Also handles full address strings to extract city, state, and zip.
         """
-        # List of combined fields to check
+        # First, handle full address fields that contain street address + city/state/zip
+        if 'address' in fields and fields['address'].value:
+            address_value = fields['address'].value.strip()
+
+            # Check if this is a full address (contains comma, suggesting street, city, state format)
+            if ',' in address_value:
+                # Try to parse out city, state, zip from the full address
+                # Common format: "123 Main St, City, State ZIP" or "123 Main St, City, State"
+                parts = address_value.split(',')
+                if len(parts) >= 2:
+                    # Last part after the street address should be city, state [zip]
+                    # Get everything after the first comma for city/state/zip parsing
+                    city_state_part = ','.join(parts[1:]).strip()
+
+                    # Use smart city/state splitting
+                    result = self._smart_split_city_state(city_state_part)
+                    if result:
+                        city, state, zip_code = result
+                        self._set_address_components(
+                            fields,
+                            city=city,
+                            state=state,
+                            zip_code=zip_code,
+                            source_field=fields['address'],
+                            source_key='address'
+                        )
+                        log_debug(f"Extracted from full address: city='{city}', state='{state}', zip='{zip_code or 'None'}'", service="pipeline")
+
+        # List of combined fields to check (city/state/zip combinations without street address)
         combined_fields = ['city_state_zip', 'citystatezip', 'city_state', 'address_line']
         
         for field_key in combined_fields:
