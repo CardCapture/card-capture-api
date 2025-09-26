@@ -530,7 +530,7 @@ async def export_to_slate_service(payload: dict):
             })
         
         # Generate CSV content using dynamic card fields with pretty headers
-        csv_content = io.StringIO()
+        # Using manual CSV generation to exactly match frontend behavior
         
         # Standard field labels mapping (same as frontend csvExport.ts)
         field_labels_map = {
@@ -631,30 +631,42 @@ async def export_to_slate_service(payload: dict):
                 # Three or more parts - first name is first part, last name is everything else
                 return {"first_name": name_parts[0], "last_name": " ".join(name_parts[1:])}
         
-        # Use QUOTE_MINIMAL to only quote fields when necessary (contains delimiter, quote, or newline)
-        # This matches the frontend behavior and prevents unnecessary quotes that break Slate imports
-        writer = csv.DictWriter(csv_content, fieldnames=headers, quoting=csv.QUOTE_MINIMAL)
-        writer.writeheader()
-        
+        def quote_field(value):
+            """Quote field exactly like frontend to ensure 100% compatibility"""
+            if not value:
+                return ""
+            str_value = str(value)
+            # Escape existing quotes by doubling them
+            escaped = str_value.replace('"', '""')
+            # Quote if contains comma, quote, newline, or carriage return
+            if any(char in escaped for char in '",\n\r'):
+                return f'"{escaped}"'
+            return escaped
+
+        # Generate CSV manually to exactly match frontend behavior
+        csv_lines = [",".join(headers)]  # Header row
+
         # Track document_ids for marking as exported
         document_ids = []
-        
+
         for row in rows:
             # Extract document_id for tracking
             document_id = row.get("document_id")
             if document_id:
                 document_ids.append(document_id)
-            
+
             # Prepare row data for CSV using pretty headers
-            csv_row = {}
+            csv_row = []
             for i, header in enumerate(headers):
                 # Get the corresponding field key for this header
                 field_key = field_keys[i] if i < len(field_keys) else header
-                
+
+                field_value = ""
+
                 # Check if this is a field that should come from the nested fields object
                 if field_key in ["event_name", "slate_event_id", "date_created", "document_id"]:
                     # These are top-level fields
-                    csv_row[header] = row.get(field_key, "")
+                    field_value = str(row.get(field_key, ""))
                 elif field_key in ["first_name", "last_name"]:
                     # Handle name splitting
                     fields_data = row.get("fields", {})
@@ -664,32 +676,40 @@ async def export_to_slate_service(payload: dict):
                             first_name_data = fields_data.get("first_name", {})
                             if first_name_data:
                                 if isinstance(first_name_data, dict):
-                                    csv_row[header] = str(first_name_data.get("value", ""))
+                                    field_value = str(first_name_data.get("value", ""))
                                 else:
-                                    csv_row[header] = str(first_name_data)
-                                continue
+                                    field_value = str(first_name_data)
+                            else:
+                                # Fallback to splitting full name
+                                name_field_data = fields_data.get("name", {})
+                                full_name = ""
+
+                                if isinstance(name_field_data, dict):
+                                    full_name = str(name_field_data.get("value", ""))
+                                else:
+                                    full_name = str(name_field_data) if name_field_data else ""
+
+                                name_parts = split_name(full_name)
+                                field_value = name_parts.get("first_name", "")
                         elif field_key == "last_name":
                             last_name_data = fields_data.get("last_name", {})
                             if last_name_data:
                                 if isinstance(last_name_data, dict):
-                                    csv_row[header] = str(last_name_data.get("value", ""))
+                                    field_value = str(last_name_data.get("value", ""))
                                 else:
-                                    csv_row[header] = str(last_name_data)
-                                continue
-                        
-                        # Fallback to splitting full name
-                        name_field_data = fields_data.get("name", {})
-                        full_name = ""
-                        
-                        if isinstance(name_field_data, dict):
-                            full_name = str(name_field_data.get("value", ""))
-                        else:
-                            full_name = str(name_field_data) if name_field_data else ""
-                        
-                        name_parts = split_name(full_name)
-                        csv_row[header] = name_parts.get(field_key, "")
-                    else:
-                        csv_row[header] = ""
+                                    field_value = str(last_name_data)
+                            else:
+                                # Fallback to splitting full name
+                                name_field_data = fields_data.get("name", {})
+                                full_name = ""
+
+                                if isinstance(name_field_data, dict):
+                                    full_name = str(name_field_data.get("value", ""))
+                                else:
+                                    full_name = str(name_field_data) if name_field_data else ""
+
+                                name_parts = split_name(full_name)
+                                field_value = name_parts.get("last_name", "")
                 else:
                     # These are card fields - extract from nested fields object
                     fields_data = row.get("fields", {})
@@ -711,15 +731,19 @@ async def export_to_slate_service(payload: dict):
                                     field_data = fields_data.get(alt_field, {})
                                     if field_data:
                                         break
-                        
+
                         if isinstance(field_data, dict):
-                            csv_row[header] = field_data.get("value", "")
+                            field_value = str(field_data.get("value", ""))
                         else:
-                            csv_row[header] = str(field_data) if field_data else ""
-                    else:
-                        csv_row[header] = ""
-            
-            writer.writerow(csv_row)
+                            field_value = str(field_data) if field_data else ""
+
+                # Apply frontend-style quoting
+                csv_row.append(quote_field(field_value))
+
+            csv_lines.append(",".join(csv_row))
+
+        # Generate final CSV content exactly like frontend
+        csv_content_final = "\n".join(csv_lines)
         
         # Generate filename with timestamp
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -736,7 +760,7 @@ async def export_to_slate_service(payload: dict):
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8') as temp_csv:
                 temp_csv_path = temp_csv.name
-                temp_csv.write(csv_content.getvalue())
+                temp_csv.write(csv_content_final)
             
             # Construct remote path
             remote_directory = sftp_config["remote_directory"].rstrip("/")

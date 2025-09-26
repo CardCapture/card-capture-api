@@ -118,7 +118,7 @@ def validate_address(
             # Get confidence score
             confidence_score = google_result.get('confidence_score', 0)
             
-            # For complete addresses (with house number), use normal thresholds
+            # For complete addresses (with house number), use updated thresholds with disambiguation
             if is_complete_address:
                 # High confidence (80+) = treat as verified
                 if confidence_score >= 80:
@@ -129,10 +129,20 @@ def validate_address(
                         suggestion=_format_suggestion(google_result),
                         original_query=original_query
                     )
-                
-                # Medium confidence (60-79) = can be verified
+
+                # Medium-high confidence (60-79) = can be verified
                 elif confidence_score >= 60:
-                    log_debug(f"Complete address with medium confidence (score: {confidence_score}) - CAN BE VERIFIED", service="address_validation")
+                    log_debug(f"Complete address with medium-high confidence (score: {confidence_score}) - CAN BE VERIFIED", service="address_validation")
+                    return AddressValidationResult(
+                        "can_be_verified",
+                        is_valid=True,
+                        suggestion=_format_suggestion(google_result),
+                        original_query=original_query
+                    )
+
+                # Moderate confidence (30-59) with ROOFTOP = can be verified (new disambiguation threshold)
+                elif confidence_score >= 30 and google_result.get('location_type') == 'ROOFTOP':
+                    log_debug(f"Complete address with moderate confidence + ROOFTOP (score: {confidence_score}) - CAN BE VERIFIED", service="address_validation")
                     return AddressValidationResult(
                         "can_be_verified",
                         is_valid=True,
@@ -312,18 +322,63 @@ def _validate_with_google_maps(address: str, city: str, state: str, zip_code: st
             if not geocode_results:
                 continue
             
-            # Evaluate each result and pick the best one
-            for result in geocode_results[:3]:  # Check top 3 results
+            # Implement disambiguation logic - score each result against reliable data
+            reliable_data = {
+                'address': original_query.get('address', ''),
+                'city': original_query.get('city', ''),
+                'state': original_query.get('state', ''),
+                'zip_code': original_query.get('zip_code', '')
+            }
+
+            # Analyze each result and score it for disambiguation
+            scored_results = []
+            for result in geocode_results[:5]:  # Check top 5 results
+                components = _extract_components(result)
+                location_type = result['geometry']['location_type']
+
+                # Calculate standard confidence score
                 confidence = _calculate_confidence_score(result, original_query)
-                
-                if confidence > best_confidence:
-                    best_confidence = confidence
-                    best_result = result
-                    
-                    # If we found a very high confidence match, use it
-                    if confidence >= 80:
-                        break
-            
+
+                # Calculate disambiguation match score
+                match_score = _calculate_match_score(components, reliable_data)
+
+                # Combine scores: base confidence + disambiguation bonus/penalty
+                final_score = confidence + match_score
+                final_score = max(0, min(final_score, 100))  # Keep in 0-100 range
+
+                scored_results.append({
+                    'result': result,
+                    'components': components,
+                    'confidence': confidence,
+                    'match_score': match_score,
+                    'final_score': final_score,
+                    'location_type': location_type
+                })
+
+                log_debug(f"Disambiguation scoring", {
+                    "address": result.get('formatted_address'),
+                    "location_type": location_type,
+                    "base_confidence": confidence,
+                    "match_score": match_score,
+                    "final_score": final_score,
+                    "components": components
+                }, service="address_validation")
+
+            # Sort by final score (highest first) and pick the best
+            if scored_results:
+                scored_results.sort(key=lambda x: x['final_score'], reverse=True)
+                best_scored = scored_results[0]
+
+                if best_scored['final_score'] > best_confidence:
+                    best_confidence = best_scored['final_score']
+                    best_result = best_scored['result']
+
+                    log_debug(f"Disambiguation selected better result", {
+                        "selected_address": best_result.get('formatted_address'),
+                        "final_score": best_scored['final_score'],
+                        "match_score": best_scored['match_score']
+                    }, service="address_validation")
+
             # If we found a good result, stop trying other queries
             if best_confidence >= 70:
                 break
@@ -587,10 +642,56 @@ def _calculate_confidence_score(google_result: Dict[str, Any], original_query: D
     return min(score, 100)  # Final cap at 100
 
 
+def _extract_components(result):
+    """Extract address components from Google result for disambiguation"""
+    components = {}
+    for comp in result['address_components']:
+        types = comp['types']
+        if 'street_number' in types:
+            components['street_number'] = comp['long_name']
+        elif 'route' in types:
+            components['route'] = comp['long_name']
+        elif 'locality' in types:
+            components['city'] = comp['long_name']
+        elif 'administrative_area_level_1' in types:
+            components['state'] = comp['short_name']
+        elif 'postal_code' in types:
+            components['zip'] = comp['long_name']
+    return components
+
+
+def _calculate_match_score(result_components, known_reliable_data):
+    """Calculate how well a result matches our known reliable data for disambiguation"""
+    score = 0
+
+    # ZIP code match (most reliable)
+    if known_reliable_data.get('zip_code') and result_components.get('zip'):
+        if result_components['zip'] == known_reliable_data['zip_code']:
+            score += 50  # High weight for ZIP match
+        else:
+            score -= 30  # Penalize ZIP mismatch heavily
+
+    # State match (fairly reliable)
+    if known_reliable_data.get('state') and result_components.get('state'):
+        if result_components['state'].upper() == known_reliable_data['state'].upper():
+            score += 20
+        else:
+            score -= 15
+
+    # City match (can be unreliable due to OCR)
+    if known_reliable_data.get('city') and result_components.get('city'):
+        if result_components['city'].lower() == known_reliable_data['city'].lower():
+            score += 15
+        else:
+            score -= 5  # Light penalty for city mismatch (might be OCR error)
+
+    return score
+
+
 def _get_friendly_error_message(error: str) -> str:
     """Convert technical errors to user-friendly messages"""
     error_lower = error.lower()
-    
+
     if 'network' in error_lower or 'fetch' in error_lower or 'connection' in error_lower:
         return "Network error - please check connection and try again"
     elif 'quota' in error_lower or 'limit' in error_lower:
@@ -680,54 +781,66 @@ def validate_address_for_pipeline(fields: Dict[str, Any]) -> Tuple[Dict[str, Any
                 fields['state']['enabled'] = True
                 fields['state']['required'] = False
                 
-            if 'zip_code' in fields:
+            # Update or create zip_code field
+            if suggestion.get('zip_code'):
+                if 'zip_code' not in fields:
+                    fields['zip_code'] = {}
                 fields['zip_code']['value'] = suggestion.get('zip_code', zip_code)
                 fields['zip_code']['requires_human_review'] = False
                 fields['zip_code']['review_notes'] = 'Auto-verified by Google Maps (high confidence)'
                 fields['zip_code']['source'] = 'google_maps_verified'
+                fields['zip_code']['enabled'] = True
+                fields['zip_code']['required'] = False
         
         log_debug("Pipeline: VERIFIED - High confidence Google Maps match, auto-applied", service="address_validation")
         return fields, "verified"
         
     elif result.state == "can_be_verified":
-        # Medium confidence - auto-apply the suggestion but note it was standardized
-        log_debug("Pipeline: CAN_BE_VERIFIED - Medium confidence, auto-applying suggestion", service="address_validation")
-        
+        # Medium or moderate confidence - auto-apply the suggestion with disambiguation
+        log_debug("Pipeline: CAN_BE_VERIFIED - Medium/moderate confidence, auto-applying suggestion", service="address_validation")
+
         if result.suggestion:
             suggestion = result.suggestion
-            
-            # Auto-apply the suggestion since we're fairly confident
+
+            # Auto-apply the suggestion - includes disambiguation results
             if 'address' in fields:
                 fields['address']['value'] = suggestion.get('address', address)
                 fields['address']['requires_human_review'] = False
-                fields['address']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
-                fields['address']['source'] = 'google_maps_suggested'
-                
+                fields['address']['review_notes'] = 'Auto-corrected by Google Maps with disambiguation'
+                fields['address']['source'] = 'google_maps_disambiguated'
+
             # Update or create city field
             if suggestion.get('city'):
                 if 'city' not in fields:
                     fields['city'] = {}
                 fields['city']['value'] = suggestion.get('city', city)
                 fields['city']['requires_human_review'] = False
-                fields['city']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
-                fields['city']['source'] = 'google_maps_suggested'
+                fields['city']['review_notes'] = 'Auto-corrected by Google Maps with disambiguation'
+                fields['city']['source'] = 'google_maps_disambiguated'
                 fields['city']['enabled'] = True
                 fields['city']['required'] = False
-                
+
             # Update or create state field
             if suggestion.get('state'):
                 if 'state' not in fields:
                     fields['state'] = {}
                 fields['state']['value'] = suggestion.get('state', state)
                 fields['state']['requires_human_review'] = False
-                fields['state']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
-                fields['state']['source'] = 'google_maps_suggested'
-                
-            if 'zip_code' in fields:
+                fields['state']['review_notes'] = 'Auto-corrected by Google Maps with disambiguation'
+                fields['state']['source'] = 'google_maps_disambiguated'
+                fields['state']['enabled'] = True
+                fields['state']['required'] = False
+
+            # Update or create zip_code field
+            if suggestion.get('zip_code'):
+                if 'zip_code' not in fields:
+                    fields['zip_code'] = {}
                 fields['zip_code']['value'] = suggestion.get('zip_code', zip_code)
                 fields['zip_code']['requires_human_review'] = False
-                fields['zip_code']['review_notes'] = 'Auto-corrected by Google Maps (medium confidence)'
-                fields['zip_code']['source'] = 'google_maps_suggested'
+                fields['zip_code']['review_notes'] = 'Auto-corrected by Google Maps with disambiguation'
+                fields['zip_code']['source'] = 'google_maps_disambiguated'
+                fields['zip_code']['enabled'] = True
+                fields['zip_code']['required'] = False
         
         return fields, "can_be_verified"
         
