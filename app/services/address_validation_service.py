@@ -7,6 +7,8 @@ import json
 from typing import Dict, Any, Optional, Tuple, Literal
 from app.core.clients import gmaps_client
 from app.utils.retry_utils import log_debug
+import google.generativeai as genai
+import os
 
 # Type definitions for validation states
 ValidationState = Literal["verified", "can_be_verified", "no_house_number", "not_verified"]
@@ -39,10 +41,88 @@ class AddressValidationResult:
         }
 
 
+def _clean_address_with_gemini(address: str, city: str = "", state: str = "", zip_code: str = "") -> Dict[str, str]:
+    """
+    Use Gemini to clean and standardize address components before Google Maps validation.
+    This handles OCR errors, misspellings, and formatting issues.
+
+    Returns cleaned components: {"address": ..., "city": ..., "state": ..., "zip_code": ...}
+    """
+    try:
+        # Configure Gemini if not already configured
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            log_debug("No Gemini API key found, skipping address cleaning", service="address_validation")
+            return {"address": address, "city": city, "state": state, "zip_code": zip_code}
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+
+        # Create a focused prompt for address cleaning
+        prompt = f"""Clean and standardize this US address. Fix any OCR errors or misspellings.
+
+Original address components:
+- Street Address: {address}
+- City: {city}
+- State: {state}
+- ZIP: {zip_code}
+
+Instructions:
+1. Fix obvious OCR errors (e.g., "Dallers" -> "Dallas", "hillun" -> "Hill Ln")
+2. If the address starts with "#" followed by numbers, those are likely apartment/unit numbers
+3. Recognize common street suffixes (St, Ave, Rd, Dr, Ln, Way, Blvd, Ct)
+4. Standardize state to 2-letter abbreviation
+5. Extract any misplaced components (e.g., if city/state/zip are in the address field)
+6. Do NOT add information that isn't present
+7. Keep house/building numbers intact
+
+Return ONLY a JSON object with these fields:
+{{
+  "address": "cleaned street address only",
+  "city": "cleaned city name",
+  "state": "2-letter state code",
+  "zip_code": "5-digit ZIP"
+}}
+
+If a field is empty or unclear, leave it as empty string."""
+
+        response = model.generate_content(prompt)
+        if not response or not response.text:
+            return {"address": address, "city": city, "state": state, "zip_code": zip_code}
+
+        # Parse the JSON response
+        cleaned_text = response.text.strip()
+        if cleaned_text.startswith("```json"):
+            cleaned_text = cleaned_text[7:]
+        elif cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text[3:]
+        if cleaned_text.endswith("```"):
+            cleaned_text = cleaned_text[:-3]
+
+        cleaned_data = json.loads(cleaned_text.strip())
+
+        log_debug("Gemini address cleaning result", {
+            "original": {"address": address, "city": city, "state": state, "zip_code": zip_code},
+            "cleaned": cleaned_data
+        }, service="address_validation")
+
+        # Return cleaned components, using originals as fallback
+        return {
+            "address": cleaned_data.get("address", address) or address,
+            "city": cleaned_data.get("city", city) or city,
+            "state": cleaned_data.get("state", state) or state,
+            "zip_code": cleaned_data.get("zip_code", zip_code) or zip_code
+        }
+
+    except Exception as e:
+        log_debug(f"Gemini address cleaning failed: {str(e)}, using original values", service="address_validation")
+        return {"address": address, "city": city, "state": state, "zip_code": zip_code}
+
+
 def validate_address(
-    address: str, 
-    city: str = "", 
-    state: str = "", 
+    address: str,
+    city: str = "",
+    state: str = "",
     zip_code: str = ""
 ) -> AddressValidationResult:
     """
@@ -61,7 +141,35 @@ def validate_address(
         "state": state,
         "zip_code": zip_code
     }, service="address_validation")
-    
+
+    # Store the original input for tracking
+    original_input = {
+        "address": address,
+        "city": city,
+        "state": state,
+        "zip_code": zip_code
+    }
+
+    # Clean address with Gemini first if we have problematic input
+    # Only use Gemini if we detect potential OCR issues or malformed data
+    needs_cleaning = False
+
+    # Check for signs of OCR errors or formatting issues
+    if address and any(issue in address.lower() for issue in ["#", "  ", "hillun", "dallers"]):
+        needs_cleaning = True
+    if city and any(char.isdigit() for char in city):  # Cities shouldn't have numbers
+        needs_cleaning = True
+    if state and (state.isdigit() or len(state) > 2):  # States should be 2-letter codes
+        needs_cleaning = True
+
+    if needs_cleaning:
+        log_debug("Address appears to need cleaning, using Gemini", service="address_validation")
+        cleaned = _clean_address_with_gemini(address, city, state, zip_code)
+        address = cleaned["address"]
+        city = cleaned["city"]
+        state = cleaned["state"]
+        zip_code = cleaned["zip_code"]
+
     original_query = {
         "address": address,
         "city": city,
@@ -252,40 +360,87 @@ def _is_complete_deliverable_address(google_result: Dict[str, Any]) -> bool:
 def _has_house_number(address: str) -> bool:
     """Check if address contains a house number (at beginning or end)"""
     import re
-    
+
     if not address or not address.strip():
         return False
-    
+
     addr = address.strip()
-    
-    # Pattern for house number at the start
-    start_pattern = r'^\s*\d+[A-Za-z]?(\s*[-/]\s*\d+)*\s+'
-    
+
+    # Remove common prefixes that might confuse the detection
+    # Handle #44, #123, etc.
+    addr_cleaned = re.sub(r'^#\s*', '', addr)
+
+    # Pattern for house number at the start (now handles # prefix)
+    # Matches: 123, 123A, 123-45, #123, etc.
+    start_patterns = [
+        r'^\s*#?\s*\d+[A-Za-z]?(\s*[-/]\s*\d+)*\s+',  # With optional # prefix
+        r'^\s*\d+[A-Za-z]?(\s*[-/]\s*\d+)*\s+',       # Standard format
+    ]
+
     # Pattern for house number at the end (e.g., "N Henderson 1601")
     end_pattern = r'\s+\d+[A-Za-z]?(\s*[-/]\s*\d+)*\s*$'
-    
-    has_number = bool(re.match(start_pattern, addr) or re.search(end_pattern, addr))
-    
+
+    # Check both original and cleaned address
+    has_number = False
+    for pattern in start_patterns:
+        if re.match(pattern, addr) or re.match(pattern, addr_cleaned):
+            has_number = True
+            break
+
+    # Also check for number at the end
+    if not has_number:
+        has_number = bool(re.search(end_pattern, addr) or re.search(end_pattern, addr_cleaned))
+
+    # Special case: Check if the address appears to have multiple numbers that could be house numbers
+    # Like "#44 110244 Walnut" where 110244 is likely the house number
+    if not has_number and re.search(r'\b\d{4,}\b', addr):
+        # If we have a 4+ digit number, it's likely a house number
+        has_number = True
+
     log_debug("House number check", {
         "address": address,
         "has_house_number": has_number
     }, service="address_validation")
-    
+
     return has_number
 
 
 def _validate_with_google_maps(address: str, city: str, state: str, zip_code: str, original_query: Dict[str, str] = None) -> Optional[Dict[str, Any]]:
     """Call Google Maps API for validation with smart query handling"""
-    
+
     if not gmaps_client:
         log_debug("Google Maps client not initialized", service="address_validation")
         return None
-    
+
     # Try multiple query strategies
     queries_to_try = []
-    
-    # Original query
-    query_parts = [address]
+
+    # Clean up address formatting issues
+    import re
+
+    # Handle # prefix (apartment/unit numbers)
+    cleaned_address = address
+    unit_number = None
+
+    # Check for unit/apartment number patterns
+    # Pattern 1: #123 at the beginning
+    unit_match = re.match(r'^#(\d+)\s+(.+)', cleaned_address)
+    if unit_match:
+        unit_number = unit_match.group(1)
+        cleaned_address = unit_match.group(2)
+        log_debug(f"Extracted unit number #{unit_number} from address", service="address_validation")
+
+    # Pattern 2: Multiple numbers that might indicate unit + street number
+    # e.g., "#44 110244 Walnut hillun" -> unit #44, address "110244 Walnut hillun"
+    if not unit_match:
+        multi_number_match = re.match(r'^#(\d+)\s+(\d+)\s+(.+)', address)
+        if multi_number_match:
+            unit_number = multi_number_match.group(1)
+            cleaned_address = f"{multi_number_match.group(2)} {multi_number_match.group(3)}"
+            log_debug(f"Extracted unit #{unit_number}, address: {cleaned_address}", service="address_validation")
+
+    # Build query with cleaned address
+    query_parts = [cleaned_address]
     if city.strip():
         query_parts.append(city.strip())
     if state.strip():
@@ -293,13 +448,24 @@ def _validate_with_google_maps(address: str, city: str, state: str, zip_code: st
     if zip_code.strip():
         query_parts.append(zip_code.strip())
     queries_to_try.append(", ".join(query_parts))
-    
+
+    # If we have unit number, also try with unit at the end
+    if unit_number:
+        address_with_unit = f"{cleaned_address} #{unit_number}"
+        query_parts_with_unit = [address_with_unit]
+        if city.strip():
+            query_parts_with_unit.append(city.strip())
+        if state.strip():
+            query_parts_with_unit.append(state.strip())
+        if zip_code.strip():
+            query_parts_with_unit.append(zip_code.strip())
+        queries_to_try.append(", ".join(query_parts_with_unit))
+
     # If house number might be at the end, try moving it to the front
-    import re
-    end_number_match = re.search(r'\s+(\d+[A-Za-z]?)\s*$', address.strip())
+    end_number_match = re.search(r'\s+(\d+[A-Za-z]?)\s*$', cleaned_address)
     if end_number_match:
         house_num = end_number_match.group(1)
-        street_part = address[:end_number_match.start()].strip()
+        street_part = cleaned_address[:end_number_match.start()].strip()
         reordered_address = f"{house_num} {street_part}"
         reordered_parts = [reordered_address]
         if city.strip():

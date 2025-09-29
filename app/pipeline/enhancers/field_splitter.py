@@ -46,13 +46,30 @@ class FieldSplitterEnhancer(FieldEnhancer):
         if 'address' in fields and fields['address'].value:
             address_value = fields['address'].value.strip()
 
-            # Check if this is a full address (contains comma, suggesting street, city, state format)
+            # IMPORTANT: Don't split addresses that appear to be street addresses only
+            # Check if this looks like a full address with city/state/zip at the end
+            # We need to be careful not to split street addresses that happen to have commas
             if ',' in address_value:
-                # Try to parse out city, state, zip from the full address
-                # Common format: "123 Main St, City, State ZIP" or "123 Main St, City, State"
                 parts = address_value.split(',')
-                if len(parts) >= 2:
-                    # Last part after the street address should be city, state [zip]
+
+                # Only try to extract city/state/zip if:
+                # 1. We have at least 3 parts (street, city, state/zip) OR
+                # 2. The last part looks like "City State ZIP" pattern
+                should_extract = False
+
+                if len(parts) >= 3:
+                    # Multiple commas suggest street, city, state format
+                    should_extract = True
+                elif len(parts) == 2:
+                    # Check if the second part looks like city/state/zip
+                    second_part = parts[1].strip()
+                    # Look for state abbreviations or zip codes
+                    if re.search(r'\b[A-Z]{2}\b', second_part) or re.search(r'\b\d{5}\b', second_part):
+                        # But NOT if it looks like a street number or apartment
+                        if not re.match(r'^\s*(#?\d+|apt|suite|unit)', second_part.lower()):
+                            should_extract = True
+
+                if should_extract:
                     # Get everything after the first comma for city/state/zip parsing
                     city_state_part = ','.join(parts[1:]).strip()
 
@@ -60,21 +77,24 @@ class FieldSplitterEnhancer(FieldEnhancer):
                     result = self._smart_split_city_state(city_state_part)
                     if result:
                         city, state, zip_code = result
-                        self._set_address_components(
-                            fields,
-                            city=city,
-                            state=state,
-                            zip_code=zip_code,
-                            source_field=fields['address'],
-                            source_key='address'
-                        )
 
-                        # IMPORTANT: Update the address field to only contain the street address
-                        # Remove the city, state, zip portion from the address
-                        street_address_only = parts[0].strip()
-                        fields['address'].value = street_address_only
-                        log_debug(f"Updated address field to street only: '{street_address_only}'", service="pipeline")
-                        log_debug(f"Extracted from full address: city='{city}', state='{state}', zip='{zip_code or 'None'}'", service="pipeline")
+                        # Only apply if we got a valid state (not a number)
+                        if state and not state.isdigit():
+                            self._set_address_components(
+                                fields,
+                                city=city,
+                                state=state,
+                                zip_code=zip_code,
+                                source_field=fields['address'],
+                                source_key='address'
+                            )
+
+                            # IMPORTANT: Update the address field to only contain the street address
+                            # Remove the city, state, zip portion from the address
+                            street_address_only = parts[0].strip()
+                            fields['address'].value = street_address_only
+                            log_debug(f"Updated address field to street only: '{street_address_only}'", service="pipeline")
+                            log_debug(f"Extracted from full address: city='{city}', state='{state}', zip='{zip_code or 'None'}'", service="pipeline")
 
         # List of combined fields to check (city/state/zip combinations without street address)
         combined_fields = ['city_state_zip', 'citystatezip', 'city_state', 'address_line']
@@ -300,7 +320,7 @@ class FieldSplitterEnhancer(FieldEnhancer):
         city = None
         state = None
         zip_code = None
-        
+
         # Look for zip code first (5 or 9 digit format)
         zip_pattern = re.compile(r'^\d{5}(-\d{4})?$')
         for i, part in enumerate(parts):
@@ -308,13 +328,17 @@ class FieldSplitterEnhancer(FieldEnhancer):
                 zip_code = part
                 parts = parts[:i] + parts[i+1:]  # Remove zip from parts
                 break
-        
+
         # Simple approach: for comma-separated, last part is likely state, first part(s) are city
         if len(parts) == 2:
             # Common case: "City, State" or "Multi Word City, State"
             potential_city = parts[0].strip('.,;:!?')
             potential_state = parts[1].lower().strip('.,;:!?')
-            
+
+            # IMPORTANT: Don't treat numbers as states
+            if potential_state.isdigit():
+                return None
+
             if potential_state in state_mapping:
                 return (potential_city, state_mapping[potential_state], zip_code)
         

@@ -292,12 +292,12 @@ def process_image_with_docai(image_path: str, processor_id: str, original_storag
 def _crop_image_from_entities(input_path: str, all_vertices: list, percent_expand: float = 0.5) -> str:
     """
     Crop image based on bounding box vertices from detected entities
-    
+
     Args:
-        input_path: Path to input image
+        input_path: Path to input image (supports PDF and image formats)
         all_vertices: List of (x, y) coordinates from all entities
         percent_expand: Percentage to expand the bounding box
-        
+
     Returns:
         Path to cropped image
     """
@@ -305,19 +305,42 @@ def _crop_image_from_entities(input_path: str, all_vertices: list, percent_expan
         if not all_vertices:
             log_debug("No vertices found, returning original image", service="docai")
             return input_path
-        
+
         # Calculate bounding box
         xs, ys = zip(*all_vertices)
         min_x, max_x = min(xs), max(xs)
         min_y, max_y = min(ys), max(ys)
-        
+
         log_debug("Bounding box coordinates", {
             "min_x": min_x, "max_x": max_x,
             "min_y": min_y, "max_y": max_y
         }, service="docai")
-        
-        # Open image and calculate crop area with expansion
-        img = Image.open(input_path)
+
+        # Handle PDF files - convert to image first
+        file_extension = os.path.splitext(input_path)[1].lower()
+        if file_extension == '.pdf':
+            log_debug("PDF detected, converting to image for cropping", service="docai")
+            try:
+                from pdf2image import convert_from_path
+
+                # Convert first page of PDF to image
+                images = convert_from_path(input_path, first_page=1, last_page=1)
+                if not images:
+                    log_debug("Failed to convert PDF to image, returning original", service="docai")
+                    return input_path
+
+                img = images[0]
+                log_debug(f"PDF converted to image: {img.size}", service="docai")
+
+            except ImportError:
+                log_debug("pdf2image not available, returning original PDF", service="docai")
+                return input_path
+            except Exception as e:
+                log_debug(f"Error converting PDF to image: {str(e)}, returning original", service="docai")
+                return input_path
+        else:
+            # Open image directly
+            img = Image.open(input_path)
         box_width = max_x - min_x
         box_height = max_y - min_y
         expand_x = box_width * (percent_expand / 2)
@@ -336,10 +359,22 @@ def _crop_image_from_entities(input_path: str, all_vertices: list, percent_expan
         cropped_img = img.crop((left, top, right, bottom))
         filename = os.path.basename(input_path)
         name, ext = os.path.splitext(filename)
-        output_path = os.path.join(TRIMMED_FOLDER, f"{name}_trimmed{ext}")
-        
+
+        # If input was PDF, save as PNG instead
+        if file_extension == '.pdf':
+            output_path = os.path.join(TRIMMED_FOLDER, f"{name}_trimmed.png")
+        else:
+            output_path = os.path.join(TRIMMED_FOLDER, f"{name}_trimmed{ext}")
+
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        cropped_img.save(output_path)
+
+        # Save with appropriate format
+        if file_extension == '.pdf':
+            cropped_img.save(output_path, 'PNG')
+            log_debug(f"Cropped PDF saved as PNG: {output_path}", service="docai")
+        else:
+            cropped_img.save(output_path)
+            log_debug(f"Cropped image saved: {output_path}", service="docai")
         
         log_debug(f"Image cropped and saved to: {output_path}", service="docai")
         return output_path
