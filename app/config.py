@@ -12,6 +12,7 @@ else:
 GOOGLE_PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID", "878585200500")
 DOCAI_LOCATION = os.getenv("DOCAI_LOCATION", "us")
 DOCAI_PROCESSOR_ID = os.getenv("DOCAI_PROCESSOR_ID", "894b9758c2215ed6")
+GOOGLE_OCR_PROCESSOR = os.getenv("GOOGLE_OCR_PROCESSOR")  # Enterprise OCR for rotation correction
 MIME_TYPE = "image/png"
 
 # Supabase Configuration
@@ -68,7 +69,7 @@ ALLOWED_ORIGINS = [
     "https://gen-lang-client-0493571343-staging.web.app"
 ]
 
-GEMINI_MODEL = " gemini-1.5-pro-latest"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 # Frontend URL for invitation links
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")

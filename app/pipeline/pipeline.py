@@ -60,8 +60,8 @@ class CardProcessingPipeline:
             HighSchoolMatcherEnhancer(),     # Match high schools and add CEEB codes
         ]
     
-    def process(self, image_path: str, school_id: str, user_id: str, 
-                event_id: Optional[str] = None) -> ProcessingResult:
+    def process(self, image_path: str, school_id: str, user_id: str,
+                event_id: Optional[str] = None, original_storage_path: Optional[str] = None) -> ProcessingResult:
         """
         Main processing entry point.
         
@@ -82,7 +82,7 @@ class CardProcessingPipeline:
         }, service="pipeline")
         
         # Build processing context
-        context = self._build_context(school_id, user_id, event_id, image_path)
+        context = self._build_context(school_id, user_id, event_id, image_path, original_storage_path)
         
         # Stage 1: Extraction
         log_debug("=== STAGE 1: EXTRACTION ===", service="pipeline")
@@ -104,8 +104,8 @@ class CardProcessingPipeline:
         
         return final_result
         
-    def _build_context(self, school_id: str, user_id: str, event_id: Optional[str], 
-                      image_path: str) -> PipelineContext:
+    def _build_context(self, school_id: str, user_id: str, event_id: Optional[str],
+                      image_path: str, original_storage_path: Optional[str] = None) -> PipelineContext:
         """Build pipeline context with school settings and requirements"""
         
         # Get school data
@@ -126,6 +126,7 @@ class CardProcessingPipeline:
             user_id=user_id,
             event_id=event_id,
             image_path=image_path,
+            original_storage_path=original_storage_path,
             valid_majors=valid_majors,
             field_requirements=field_requirements
         )
@@ -144,7 +145,11 @@ class CardProcessingPipeline:
         
         # Run DocAI
         log_debug("Running DocAI extraction", {"processor_id": processor_id}, service="pipeline")
-        docai_fields, cropped_image_path = process_image_with_docai(image_path, processor_id)
+        docai_fields, cropped_image_path = process_image_with_docai(
+            image_path,
+            processor_id,
+            original_storage_path=context.original_storage_path
+        )
         
         # Run Gemini for enhancement
         log_debug("Running Gemini enhancement", {

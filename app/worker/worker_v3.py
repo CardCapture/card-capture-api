@@ -217,11 +217,17 @@ def process_job_v3(job: Dict[str, Any]) -> None:
 
         # Step 2: Run the pipeline (this is the magic!)
         log_debug("=== STEP 2: RUN PIPELINE ===", service="worker_v3")
+
+        # Extract storage path for rotation correction
+        # file_url format: "cards-uploads/user_id/date/filename"
+        original_storage_path = file_url if file_url.startswith('cards-uploads/') else f'cards-uploads/{file_url.split("/", 1)[1] if "/" in file_url else file_url}'
+
         result = pipeline.process(
             image_path=tmp_file,
             school_id=school_id,
             user_id=user_id,
-            event_id=event_id
+            event_id=event_id,
+            original_storage_path=original_storage_path
         )
         
         log_debug("Pipeline processing complete", {

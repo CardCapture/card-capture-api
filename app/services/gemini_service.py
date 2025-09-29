@@ -62,7 +62,8 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
         log_debug("Gemini configured successfully", service="gemini")
         
         log_debug("Initializing Gemini model...", service="gemini")
-        model = genai.GenerativeModel("gemini-1.5-pro-latest")
+        log_debug(f"Using model: {GEMINI_MODEL}", service="gemini")
+        model = genai.GenerativeModel(GEMINI_MODEL)
         log_debug("Gemini model initialized successfully", service="gemini")
         
         # Prepare input for Gemini (fields + valid_majors)
