@@ -199,7 +199,7 @@ async def extract_signup_data_with_gemini(image_path: str) -> List[Dict]:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
             
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-pro")
         
         # Read image file
         with open(image_path, 'rb') as f:
