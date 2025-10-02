@@ -632,16 +632,13 @@ async def export_to_slate_service(payload: dict):
                 return {"first_name": name_parts[0], "last_name": " ".join(name_parts[1:])}
         
         def quote_field(value):
-            """Quote field exactly like frontend to ensure 100% compatibility"""
+            """Strip commas to prevent Slate import issues"""
             if not value:
                 return ""
             str_value = str(value)
-            # Escape existing quotes by doubling them
-            escaped = str_value.replace('"', '""')
-            # Quote if contains comma, quote, newline, or carriage return
-            if any(char in escaped for char in '",\n\r'):
-                return f'"{escaped}"'
-            return escaped
+            # Strip commas to prevent Slate parsing issues
+            cleaned = str_value.replace(',', '')
+            return cleaned
 
         # Generate CSV manually to exactly match frontend behavior
         csv_lines = [",".join(headers)]  # Header row
