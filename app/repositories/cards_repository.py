@@ -48,8 +48,8 @@ def get_cards_db(supabase_client, event_id: Union[str, None] = None) -> List[Dic
                     "reviewed_at": interaction.get("reviewed_at"),
                     "exported_at": interaction.get("exported_at"),
                     "upload_type": interaction.get("source_method", "qr_code"),  # Map source_method to upload_type
-                    "image_path": None,  # QR codes don't have images
-                    "trimmed_image_path": None,
+                    "image_path": interaction.get("image_path"),  # Universal cards have images, QR codes will be None
+                    "trimmed_image_path": interaction.get("image_path"),  # Use same path for trimmed (no trimming for V2)
                 }
                 all_cards.append(card)
 
