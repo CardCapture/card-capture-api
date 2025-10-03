@@ -69,7 +69,7 @@ ALLOWED_ORIGINS = [
     "https://gen-lang-client-0493571343-staging.web.app"
 ]
 
-GEMINI_MODEL = "gemini-1.5-pro"
+GEMINI_MODEL = "gemini-2.0-flash"  # gemini-1.5-pro is deprecated
 
 # Frontend URL for invitation links
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
