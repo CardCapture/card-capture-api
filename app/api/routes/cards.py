@@ -102,12 +102,19 @@ async def move_cards(payload: BulkActionPayload):
 @router.post("/save-review/{document_id}")
 async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(...)):
     """
-    Save manual review changes for a card
+    Save manual review changes for a card (supports both V1 and V2)
     """
     try:
-        # Get current card data
+        # Get current card data - try V1 first, then V2
         supabase_client = get_supabase_client()
         current_card = supabase_client.table("reviewed_data").select("*").eq("document_id", document_id).maybe_single().execute()
+
+        is_v2 = False
+        if not current_card or not current_card.data:
+            # Try V2 table (student_school_interactions)
+            current_card = supabase_client.table("student_school_interactions").select("*").eq("id", document_id).maybe_single().execute()
+            is_v2 = True
+
         if not current_card or not current_card.data:
             raise HTTPException(status_code=404, detail="Card not found")
 
@@ -160,19 +167,33 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
         # Filter out combined fields before saving
         filtered_fields = filter_combined_fields(current_fields_data)
 
-        # Update the card
-        update_data = {
-            "document_id": document_id,
-            "fields": filtered_fields,  # Use filtered fields without combined address fields
-            "review_status": review_status,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "school_id": current_card.data.get("school_id"),  # Preserve school_id
-            "event_id": current_card.data.get("event_id"),    # Preserve event_id
-            "image_path": current_card.data.get("image_path") # Preserve image_path
-        }
+        # Update the card in the correct table
+        if is_v2:
+            # Update V2 interaction
+            update_data = {
+                "fields": filtered_fields,
+                "review_status": review_status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if review_status == "reviewed" and not current_card.data.get("reviewed_at"):
+                update_data["reviewed_at"] = datetime.now(timezone.utc).isoformat()
 
-        response = upsert_reviewed_data(supabase_client, update_data)
-        return response.data[0] if response.data else None
+            response = supabase_client.table("student_school_interactions").update(update_data).eq("id", document_id).execute()
+            return response.data[0] if response.data else None
+        else:
+            # Update V1 card
+            update_data = {
+                "document_id": document_id,
+                "fields": filtered_fields,  # Use filtered fields without combined address fields
+                "review_status": review_status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "school_id": current_card.data.get("school_id"),  # Preserve school_id
+                "event_id": current_card.data.get("event_id"),    # Preserve event_id
+                "image_path": current_card.data.get("image_path") # Preserve image_path
+            }
+
+            response = upsert_reviewed_data(supabase_client, update_data)
+            return response.data[0] if response.data else None
 
     except Exception as e:
         print(f"Error saving review: {str(e)}")
@@ -253,29 +274,36 @@ async def validate_address_endpoint(payload: Dict[str, Any] = Body(...)):
 @router.post("/mark-field-reviewed/{document_id}")
 async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(...)):
     """
-    Mark specific fields as manually reviewed
-    
+    Mark specific fields as manually reviewed (supports both V1 and V2)
+
     Payload should contain:
     {
         "field_name": "address",  // or other field name
         "reviewed": true,         // mark as reviewed
         "review_notes": "User confirmed address is correct as-is"
     }
-    
-    This allows users to mark problematic fields (like unverifiable addresses) 
+
+    This allows users to mark problematic fields (like unverifiable addresses)
     as reviewed so the card can move to 'ready for export' state.
     """
     try:
         field_name = payload.get("field_name")
         reviewed = payload.get("reviewed", True)
         review_notes = payload.get("review_notes", "Manually marked as reviewed")
-        
+
         if not field_name:
             return JSONResponse(status_code=400, content={"error": "field_name is required"})
-        
-        # Get current card data
+
+        # Get current card data - try V1 first, then V2
         supabase_client = get_supabase_client()
         current_card = supabase_client.table("reviewed_data").select("*").eq("document_id", document_id).maybe_single().execute()
+
+        is_v2 = False
+        if not current_card or not current_card.data:
+            # Try V2 table (student_school_interactions)
+            current_card = supabase_client.table("student_school_interactions").select("*").eq("id", document_id).maybe_single().execute()
+            is_v2 = True
+
         if not current_card or not current_card.data:
             raise HTTPException(status_code=404, detail="Card not found")
         
@@ -310,20 +338,33 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
         
         # Filter out combined fields before saving
         filtered_fields = filter_combined_fields(current_fields_data)
-        
-        # Update the card
-        update_data = {
-            "document_id": document_id,
-            "fields": filtered_fields,
-            "review_status": review_status,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "school_id": current_card.data.get("school_id"),
-            "event_id": current_card.data.get("event_id"),
-            "image_path": current_card.data.get("image_path")
-        }
-        
-        response = upsert_reviewed_data(supabase_client, update_data)
-        
+
+        # Update the card in the correct table
+        if is_v2:
+            # Update V2 interaction
+            update_data = {
+                "fields": filtered_fields,
+                "review_status": review_status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if review_status == "reviewed" and not current_card.data.get("reviewed_at"):
+                update_data["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+
+            response = supabase_client.table("student_school_interactions").update(update_data).eq("id", document_id).execute()
+        else:
+            # Update V1 card
+            update_data = {
+                "document_id": document_id,
+                "fields": filtered_fields,
+                "review_status": review_status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "school_id": current_card.data.get("school_id"),
+                "event_id": current_card.data.get("event_id"),
+                "image_path": current_card.data.get("image_path")
+            }
+
+            response = upsert_reviewed_data(supabase_client, update_data)
+
         return JSONResponse(status_code=200, content={
             "message": f"Field '{field_name}' marked as reviewed",
             "field_updated": field_name,

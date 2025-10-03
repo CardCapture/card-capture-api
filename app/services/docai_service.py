@@ -9,14 +9,57 @@ import io
 from app.config import PROJECT_ID, DOCAI_LOCATION, TRIMMED_FOLDER, GOOGLE_OCR_PROCESSOR
 from app.utils.retry_utils import retry_with_exponential_backoff, log_debug
 from app.core.clients import get_supabase_client
+import re
 
-def process_image_with_docai(image_path: str, processor_id: str, original_storage_path: str = None) -> Tuple[Dict[str, Any], str]:
+
+def extract_serial_number_from_ocr(ocr_document) -> Optional[str]:
     """
-    Two-step DocAI processing with rotation correction:
+    Extract serial number from Enterprise OCR result.
+
+    Simplified version since format is always "Card ID" followed by a number.
+    Faster than regex and more reliable for known format.
+    """
+    if not ocr_document or not ocr_document.text:
+        return None
+
+    text = ocr_document.text
+    log_debug(f"Searching for serial number in {len(text)} characters of OCR text", service="docai")
+
+    # Look for "Card ID" in text (case insensitive)
+    text_lower = text.lower()
+    card_id_index = text_lower.find("card id")
+
+    if card_id_index == -1:
+        log_debug("No 'Card ID' text found in OCR", service="docai")
+        return None
+
+    # Get substring after "Card ID"
+    after_card_id = text[card_id_index + 7:]  # 7 = len("card id")
+
+    # Extract first sequence of digits (skipping any delimiters like -, :, #, spaces)
+    digits = ""
+    for char in after_card_id:
+        if char.isdigit():
+            digits += char
+        elif digits:  # Stop at first non-digit after we've found digits
+            break
+
+    if len(digits) >= 4:  # Validate reasonable serial number length
+        log_debug(f"✅ Serial number found: {digits}", service="docai")
+        return digits
+
+    log_debug("No valid serial number found after 'Card ID'", service="docai")
+    return None
+
+
+def process_image_with_docai(image_path: str, processor_id: str, original_storage_path: str = None) -> Tuple[Dict[str, Any], str, Optional[str], Optional[str]]:
+    """
+    Two-step DocAI processing with rotation correction and serial number extraction:
     1. Enterprise OCR for rotation correction (if GOOGLE_OCR_PROCESSOR is set)
-    2. Custom processor for field extraction
-    3. Save corrected image to Supabase (if original_storage_path provided)
-    4. Crop image and return extracted fields
+    2. Extract serial number from OCR text (for universal cards)
+    3. Custom processor for field extraction
+    4. Save corrected image to Supabase (if original_storage_path provided)
+    5. Crop image and return extracted fields
 
     Args:
         image_path: Path to the input image
@@ -24,7 +67,7 @@ def process_image_with_docai(image_path: str, processor_id: str, original_storag
         original_storage_path: Supabase storage path for saving corrected image
 
     Returns:
-        Tuple of (field_data_dict, cropped_image_path)
+        Tuple of (field_data_dict, cropped_image_path, ocr_text, serial_number)
     """
     try:
         # Log processing start
@@ -65,8 +108,12 @@ def process_image_with_docai(image_path: str, processor_id: str, original_storag
         # Content that will be used for custom processor (may be corrected by OCR)
         processing_content = original_content
 
+        # Variables to store OCR text and serial number for universal cards
+        ocr_text = None
+        serial_number = None
+
         # =====================================
-        # STEP 1: ENTERPRISE OCR (ROTATION FIX)
+        # STEP 1: ENTERPRISE OCR (ROTATION FIX + SERIAL EXTRACTION)
         # Only if we have OCR processor and storage path
         # =====================================
 
@@ -97,6 +144,16 @@ def process_image_with_docai(image_path: str, processor_id: str, original_storag
                     service="docai"
                 )
                 log_debug("✅ Enterprise OCR processing successful", service="docai")
+
+                # Extract OCR text and serial number for universal cards
+                if ocr_result.document and ocr_result.document.text:
+                    ocr_text = ocr_result.document.text
+                    log_debug(f"Enterprise OCR extracted {len(ocr_text)} characters", service="docai")
+
+                    # Try to find serial number in OCR text
+                    serial_number = extract_serial_number_from_ocr(ocr_result.document)
+                    if serial_number:
+                        log_debug(f"🎯 Serial number detected: {serial_number}", service="docai")
 
                 # Extract the rotation-corrected image
                 if ocr_result.document.pages and len(ocr_result.document.pages) > 0:
@@ -206,6 +263,18 @@ def process_image_with_docai(image_path: str, processor_id: str, original_storag
             "num_entities": len(document.entities)
         }, service="docai")
 
+        # If we didn't get OCR text from Enterprise OCR, try to extract from custom processor
+        # This allows serial number detection even without rotation correction
+        if not ocr_text and document.text:
+            ocr_text = document.text
+            log_debug(f"Using custom processor OCR text ({len(ocr_text)} characters)", service="docai")
+
+        # If we didn't find serial number in Enterprise OCR, try custom processor OCR
+        if not serial_number and document:
+            serial_number = extract_serial_number_from_ocr(document)
+            if serial_number:
+                log_debug(f"🎯 Serial number found in custom processor OCR: {serial_number}", service="docai")
+
         # =====================================
         # EXTRACT FIELD DATA (SAME AS BEFORE)
         # =====================================
@@ -283,7 +352,10 @@ def process_image_with_docai(image_path: str, processor_id: str, original_storag
         log_debug(f"=== {completion_msg} ===", service="docai")
         log_debug(f"Cropped image saved to: {cropped_image_path}", service="docai")
 
-        return field_data, cropped_image_path
+        if serial_number:
+            log_debug(f"Returning with serial number: {serial_number}", service="docai")
+
+        return field_data, cropped_image_path, ocr_text, serial_number
 
     except Exception as e:
         log_debug(f"ERROR in DocAI processing: {str(e)}", service="docai")

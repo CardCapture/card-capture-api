@@ -2,6 +2,7 @@ from typing import Optional, Dict, Any
 import secrets
 
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 
 
 def get_student_by_email(email: str) -> Optional[Dict[str, Any]]:
@@ -74,5 +75,41 @@ def get_student_by_token(token: str) -> Optional[Dict[str, Any]]:
     # Ensure id present
     student["id"] = rows[0]["student_id"]
     return student
+
+
+def get_student_by_serial(serial_number: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a student by serial number (universal card ID).
+    This is used to check if a card has been scanned before.
+    """
+    if not serial_number or not serial_number.strip():
+        return None
+
+    sb = get_supabase_client()
+
+    try:
+        response = (
+            sb.table("students")
+            .select("*")
+            .eq("serial_number", serial_number)
+            .limit(1)
+            .execute()
+        )
+
+        rows = getattr(response, "data", None) or []
+
+        if rows:
+            log_debug(f"✅ Found existing student for serial {serial_number}", {
+                "student_id": rows[0].get("id"),
+                "name": f"{rows[0].get('first_name')} {rows[0].get('last_name')}"
+            }, service="students_repository")
+            return rows[0]
+        else:
+            log_debug(f"No student found for serial {serial_number}", service="students_repository")
+            return None
+
+    except Exception as e:
+        log_debug(f"Error looking up student by serial {serial_number}: {e}", service="students_repository")
+        return None
 
 

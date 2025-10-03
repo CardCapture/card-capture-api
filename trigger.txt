@@ -1,1 +1,0 @@
-# trigger redeploy - fix Supabase client lazy initialization
