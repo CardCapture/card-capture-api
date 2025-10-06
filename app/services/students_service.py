@@ -3,6 +3,7 @@ import uuid
 from fastapi import HTTPException
 import os
 import resend
+from datetime import datetime, timezone
 
 from app.core.clients import get_supabase_client
 from app.repositories.students_repository import (
@@ -12,6 +13,11 @@ from app.repositories.students_repository import (
     get_student_by_token,
 )
 from app.repositories.reviewed_data_repository import upsert_reviewed_data
+from app.repositories.interactions_repository import (
+    create_student_school_interaction,
+    check_existing_interaction,
+    update_student_school_interaction,
+)
 from app.utils.qr_utils import qr_png_data_uri
 from app.utils.retry_utils import log_debug
 
@@ -208,7 +214,7 @@ async def scan_student(
     rating: Optional[int],
     notes: Optional[str],
 ) -> Dict[str, Any]:
-    """Resolve token and upsert a reviewed_data row for the event with student fields."""
+    """Resolve token and create a student_school_interaction for the event (V2)."""
     # Basic guardrails to prevent massive data URIs or junk from being sent to PostgREST
     token = (token or "").strip()
     if not token or len(token) > 128 or token.startswith("data:") or "base64," in token:
@@ -217,45 +223,72 @@ async def scan_student(
     if not s:
         raise HTTPException(status_code=400, detail="Invalid token")
 
+    # Convert student columns to V2 field structure
     fields = _student_to_reviewed_fields(s)
-    if rating is not None:
-        fields["rating"] = _field(str(rating), source="rep")
-    if notes:
-        fields["notes"] = _field(notes, source="rep")
 
-    # Use a deterministic UUID so rescans of the same student/event upsert the same row
-    deterministic_name = f"cardcapture/student/{s['id']}/event/{event_id}"
-    document_id = str(uuid.uuid5(uuid.NAMESPACE_URL, deterministic_name))
-    data = {
-        "document_id": document_id,
-        "fields": fields,
+    # Check if this student has already been scanned for this event
+    existing = check_existing_interaction(s['id'], school_id, event_id)
+
+    # Create or update student_school_interaction (V2)
+    interaction_data = {
+        "student_id": s['id'],
         "school_id": school_id,
-        "user_id": user_id,
         "event_id": event_id,
-        "review_status": "reviewed",
-        "upload_type": "student_qr",
+        "fields": fields,
+        "source_method": "qr_code",
+        "review_status": "reviewed",  # QR codes are auto-approved (student entered data)
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    upsert_reviewed_data(get_supabase_client(), data)
-    return {"success": True, "document_id": document_id, "student_id": s["id"]}
+    # Add optional fields only if provided
+    if user_id:
+        interaction_data["user_id"] = user_id
+    if rating is not None:
+        interaction_data["rating"] = rating
+    if notes:
+        interaction_data["notes"] = notes
+
+    if existing:
+        # Update existing interaction
+        interaction = update_student_school_interaction(existing["id"], interaction_data)
+        log_debug(f"Updated existing QR scan interaction: {existing['id']}", service="students")
+    else:
+        # Create new interaction
+        interaction_data["created_at"] = datetime.now(timezone.utc).isoformat()
+        interaction = create_student_school_interaction(interaction_data)
+        log_debug(f"Created new QR scan interaction: {interaction['id']}", service="students")
+    return {
+        "success": True,
+        "interaction_id": interaction["id"],
+        "student_id": s["id"]
+    }
 
 
 def _field(value: Any, source: str = "student_self") -> Dict[str, Any]:
+    """Create a V2 field structure for student_school_interactions."""
     return {
         "value": value,
+        "confidence": 1.0,  # Student entered data = high confidence
         "source": source,
-        "confidence": 0.99 if source == "student_self" else 1.0,
-        "enabled": True,
-        "required": False,
-        "reviewed": True,
+        "enabled": True,     # Will be set by school-specific settings
+        "required": False,   # Will be set by school-specific settings
+        "requires_review": False,  # QR codes don't need review (student entered data)
+        "original_value": value,
     }
 
 
 def _student_to_reviewed_fields(s: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert student table columns to V2 interaction field structure.
+
+    This creates the JSONB fields structure for student_school_interactions,
+    converting from structured columns to the school's working copy format.
+    """
     def f(v):
         return _field(v) if v not in (None, "") else None
 
-    # Prefer canonical columns in students table
+    # Handle special cases
+    # 1. Academic interests - join array into comma-separated string
     academic_list = s.get("academic_interests") or s.get("intended_majors")
     if isinstance(academic_list, list):
         academic_joined = ", ".join([
@@ -266,19 +299,67 @@ def _student_to_reviewed_fields(s: Dict[str, Any]) -> Dict[str, Any]:
     else:
         academic_joined = str(academic_list) if academic_list not in (None, "") else None
 
+    # 2. Permission to text - convert boolean to text
+    permission_text = None
+    if s.get("permission_to_text") is True:
+        permission_text = "Yes"
+    elif s.get("permission_to_text") is False:
+        permission_text = "No"
+
+    # 3. Date of birth - convert to string if date object
+    dob = s.get("date_of_birth")
+    if dob and not isinstance(dob, str):
+        dob = str(dob)
+
+    # 4. High school validation - look up CEEB code if high school exists
+    high_school_name = s.get("high_school")
+    student_state = s.get("state")
+    ceeb_code = None
+    high_school_validation_status = "not_verified"
+
+    if high_school_name and high_school_name.strip():
+        try:
+            # Try to find exact match in high schools directory
+            sb = get_supabase_client()
+
+            # If we have a state, prioritize schools in that state
+            if student_state:
+                hs_result = sb.table("high_schools_directory").select("ceeb_code, name, city, state").ilike("name", high_school_name).eq("state", student_state).limit(1).execute()
+
+                if not hs_result.data or len(hs_result.data) == 0:
+                    # Fall back to any state if no match in student's state
+                    hs_result = sb.table("high_schools_directory").select("ceeb_code, name, city, state").ilike("name", high_school_name).limit(1).execute()
+            else:
+                # No state info, just search by name
+                hs_result = sb.table("high_schools_directory").select("ceeb_code, name, city, state").ilike("name", high_school_name).limit(1).execute()
+
+            if hs_result.data and len(hs_result.data) > 0:
+                school_match = hs_result.data[0]
+                # Check if it's an exact match (case insensitive)
+                if school_match["name"].lower() == high_school_name.lower():
+                    ceeb_code = school_match.get("ceeb_code")
+                    high_school_validation_status = "verified"
+                    log_debug(f"High school verified: {high_school_name} ({school_match['state']}) -> CEEB: {ceeb_code}", service="students")
+        except Exception as e:
+            log_debug(f"Error looking up high school: {e}", service="students")
+
+    # Map all student columns to V2 field structure
     mapping = {
         "first_name": f(s.get("first_name")),
         "last_name": f(s.get("last_name")),
+        "preferred_first_name": f(s.get("preferred_first_name")),
         "email": f(s.get("email")),
         "cell": f(s.get("cell")),
-        "permission_to_text": f("Yes" if s.get("permission_to_text") is True else ("No" if s.get("permission_to_text") is False else None)),
-        "date_of_birth": f(s.get("date_of_birth")),
+        "permission_to_text": f(permission_text),
+        "date_of_birth": f(dob),
         "address": f(s.get("address")),
         "address_2": f(s.get("address_2")),
         "city": f(s.get("city")),
         "state": f(s.get("state")),
         "zip_code": f(s.get("zip_code")),
-        "high_school": f(s.get("high_school")),
+        "high_school": f(high_school_name),
+        "high_school_validation": f(high_school_validation_status),  # Add validation status
+        "ceeb_code": f(ceeb_code) if ceeb_code else None,  # Add CEEB code if found
         "grade_level": f(s.get("grade_level")),
         "grad_year": f(s.get("grad_year")),
         "gpa": f(s.get("gpa")),
@@ -288,6 +369,7 @@ def _student_to_reviewed_fields(s: Dict[str, Any]) -> Dict[str, Any]:
         "academic_interests": f(academic_joined),
         "entry_term": f(s.get("entry_term")),
         "entry_year": f(s.get("entry_year")),
+        "student_type": f(s.get("student_type")),
         "major": f(s.get("major")),
     }
 

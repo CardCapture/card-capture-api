@@ -77,7 +77,7 @@ def determine_review_status(fields: Dict[str, Any]) -> Tuple[str, List[str]]:
     
     # Determine final status
     if fields_needing_review:
-        review_status = "needs_human_review"
+        review_status = "needs_review"
         log_debug(f"Card needs review - {len(fields_needing_review)} fields flagged", service="review")
     else:
         review_status = "reviewed"

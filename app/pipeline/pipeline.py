@@ -87,21 +87,42 @@ class CardProcessingPipeline:
         # Stage 1: Extraction
         log_debug("=== STAGE 1: EXTRACTION ===", service="pipeline")
         extraction_result = self._extract(image_path, context)
-        
-        # Stage 2: Enhancement 
+
+        # If we found an existing student, skip enhancers and return as-is
+        # The existing student data is already validated and clean
+        if extraction_result.metadata.get("skipped_gemini"):
+            log_debug("=== SKIPPING ENHANCEMENT & REVIEW (Existing Student) ===", {
+                "student_id": extraction_result.metadata.get("student_id"),
+                "reason": "Using existing student data from database"
+            }, service="pipeline")
+
+            # Mark as reviewed since it's from existing student
+            extraction_result.metadata["review_status"] = "reviewed"
+            extraction_result.metadata["fields_needing_review"] = []
+
+            log_debug("=== CARD PROCESSING PIPELINE COMPLETE ===", {
+                "review_status": "reviewed",
+                "fields_needing_review": [],
+                "total_fields": len(extraction_result.fields),
+                "skipped_stages": ["enhancement", "review"]
+            }, service="pipeline")
+
+            return extraction_result
+
+        # Stage 2: Enhancement
         log_debug("=== STAGE 2: ENHANCEMENT ===", service="pipeline")
         enhanced_result = self._enhance(extraction_result, context)
-        
+
         # Stage 3: Review Preparation
         log_debug("=== STAGE 3: REVIEW PREPARATION ===", service="pipeline")
         final_result = self._prepare_for_review(enhanced_result, context)
-        
+
         log_debug("=== CARD PROCESSING PIPELINE COMPLETE ===", {
             "review_status": final_result.metadata.get("review_status"),
             "fields_needing_review": final_result.metadata.get("fields_needing_review"),
             "total_fields": len(final_result.fields)
         }, service="pipeline")
-        
+
         return final_result
         
     def _build_context(self, school_id: str, user_id: str, event_id: Optional[str],
@@ -134,22 +155,47 @@ class CardProcessingPipeline:
     def _extract(self, image_path: str, context: PipelineContext) -> ProcessingResult:
         """
         Extraction stage - get raw data from DocAI and Gemini.
-        
-        This stage does minimal processing, just extracts data.
+
+        For universal cards with serial numbers:
+        1. DocAI extracts serial number from OCR
+        2. Check if student exists by serial
+        3. If exists → Skip Gemini, use existing data
+        4. If not exists → Run Gemini as normal
         """
         # Get DocAI processor ID for school
         supabase = get_supabase_client()
         school_query = supabase.table("schools").select("docai_processor_id").eq("id", context.school_id).maybe_single().execute()
         from app.config import DOCAI_PROCESSOR_ID
         processor_id = school_query.data.get("docai_processor_id") if school_query.data else DOCAI_PROCESSOR_ID
-        
-        # Run DocAI
+
+        # Run DocAI (now returns 4 values including serial number)
         log_debug("Running DocAI extraction", {"processor_id": processor_id}, service="pipeline")
-        docai_fields, cropped_image_path = process_image_with_docai(
+        docai_fields, cropped_image_path, ocr_text, serial_number = process_image_with_docai(
             image_path,
             processor_id,
             original_storage_path=context.original_storage_path
         )
+
+        # Check for existing student if serial number found
+        if serial_number:
+            from app.repositories.students_repository import get_student_by_serial
+
+            log_debug(f"🔍 Serial number detected: {serial_number}, checking for existing student", service="pipeline")
+            existing_student = get_student_by_serial(serial_number)
+
+            if existing_student:
+                # JACKPOT! Use existing student data, skip Gemini
+                log_debug(f"🎯 Found existing student! Skipping Gemini to save cost.", {
+                    "serial": serial_number,
+                    "student_id": existing_student["id"],
+                    "name": f"{existing_student.get('first_name')} {existing_student.get('last_name')}"
+                }, service="pipeline")
+
+                return self._create_result_from_existing_student(existing_student, serial_number, cropped_image_path, context)
+            else:
+                log_debug(f"Serial {serial_number} not in database - will run full pipeline and create student", service="pipeline")
+                # Store serial in context for later use
+                context.metadata["serial_number"] = serial_number
         
         # Run Gemini for enhancement
         log_debug("Running Gemini enhancement", {
@@ -200,17 +246,84 @@ class CardProcessingPipeline:
             "total_fields": len(fields),
             "field_names": list(fields.keys())[:10]  # Log first 10
         }, service="pipeline")
-        
+
+        # Build extraction metadata
+        extraction_metadata = {
+            "cropped_image_path": cropped_image_path,
+            "docai_field_count": len(docai_fields),
+            "gemini_field_count": len(gemini_fields)
+        }
+
+        # Include serial number if found
+        if serial_number:
+            extraction_metadata["serial_number"] = serial_number
+
+        return ProcessingResult(
+            fields=fields,
+            stage=ProcessingStage.EXTRACTION,
+            metadata=extraction_metadata
+        )
+
+    def _create_result_from_existing_student(
+        self,
+        student: Dict[str, Any],
+        serial_number: str,
+        cropped_image_path: Optional[str],
+        context: PipelineContext
+    ) -> ProcessingResult:
+        """
+        Create extraction result from existing student record.
+        This is used when we find a universal card with a serial that already exists.
+        Skips Gemini to save cost and time.
+        """
+        from app.services.students_service import _student_to_reviewed_fields
+
+        log_debug("Converting existing student to field structure", {
+            "student_id": student["id"]
+        }, service="pipeline")
+
+        # Convert student columns to field dict
+        fields_dict = _student_to_reviewed_fields(student)
+
+        # Convert to FieldData objects for pipeline
+        fields = {}
+        for field_name, field_value in fields_dict.items():
+            if isinstance(field_value, dict) and "value" in field_value:
+                fields[field_name] = FieldData(
+                    value=field_value["value"],
+                    confidence=field_value.get("confidence", 1.0),
+                    source=field_value.get("source", "student_self"),
+                    enabled=field_value.get("enabled", True),
+                    required=field_value.get("required", False),
+                    requires_human_review=field_value.get("requires_review", False),
+                    original_value=field_value.get("original_value")
+                )
+
+        # Add serial number field if not present
+        if "serial_number" not in fields:
+            fields["serial_number"] = FieldData(
+                value=serial_number,
+                confidence=1.0,
+                source="docai_ocr",
+                enabled=True,
+                required=False,
+                requires_human_review=False,
+                original_value=serial_number
+            )
+
         return ProcessingResult(
             fields=fields,
             stage=ProcessingStage.EXTRACTION,
             metadata={
+                "source": "existing_student",
+                "student_id": student["id"],
+                "serial_number": serial_number,
+                "skipped_gemini": True,
                 "cropped_image_path": cropped_image_path,
-                "docai_field_count": len(docai_fields),
-                "gemini_field_count": len(gemini_fields)
+                "cost_saved": "$0.003"  # Typical Gemini API call cost
             }
         )
-    
+
     def _enhance(self, extraction_result: ProcessingResult, context: PipelineContext) -> ProcessingResult:
         """
         Enhancement stage - apply all enhancers in sequence.

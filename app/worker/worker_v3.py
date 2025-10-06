@@ -147,6 +147,141 @@ def handle_job_failure(supabase_client, job: Dict[str, Any], error_message: str)
         mark_job_permanently_failed(job_id, f"Failed after {MAX_RETRIES} attempts: {error_message}")
 
 
+def save_v2_universal_card(
+    supabase_client,
+    job_id: str,
+    result: Any,
+    fields_dict: Dict,
+    school_id: str,
+    user_id: str,
+    event_id: str,
+    serial_number: str,
+    image_path: str,
+    now: str
+) -> None:
+    """
+    Save V2 universal card to student_school_interactions table.
+    Creates student record if it doesn't exist (new serial number).
+    """
+    from app.repositories.students_repository import get_student_by_serial, upsert_student
+    from app.repositories.interactions_repository import create_student_school_interaction
+
+    log_debug("=== SAVING V2 UNIVERSAL CARD ===", {
+        "serial_number": serial_number,
+        "school_id": school_id,
+        "event_id": event_id
+    }, service="worker_v3")
+
+    # Check if this is an existing student or new student
+    student_id = result.metadata.get("student_id")
+
+    if not student_id:
+        # New student - create from OCR result
+        log_debug(f"Creating new student record for serial {serial_number}", service="worker_v3")
+
+        # Extract student data from fields
+        student_data = {
+            "serial_number": serial_number,
+            "source_method": "universal_card",
+            "image_url": image_path  # Store original card image URL
+        }
+
+        # Map common fields from OCR to student columns
+        field_mapping = {
+            "first_name": "first_name",
+            "last_name": "last_name",
+            "preferred_first_name": "preferred_first_name",
+            "email": "email",
+            "cell": "cell",
+            "date_of_birth": "date_of_birth",
+            "address": "address",
+            "address_2": "address_2",
+            "city": "city",
+            "state": "state",
+            "zip_code": "zip_code",
+            "high_school": "high_school",
+            "grade_level": "grade_level",
+            "grad_year": "grad_year",
+            "gpa": "gpa",
+            "gpa_scale": "gpa_scale",
+            "sat_score": "sat_score",
+            "act_score": "act_score",
+            "entry_term": "entry_term",
+            "entry_year": "entry_year",
+            "student_type": "student_type",
+            "major": "major"
+        }
+
+        for field_key, student_col in field_mapping.items():
+            if field_key in fields_dict:
+                value = fields_dict[field_key].get("value")
+                if value and value != "":
+                    student_data[student_col] = value
+
+        # Handle permission_to_text conversion (text to boolean)
+        if "permission_to_text" in fields_dict:
+            ptt_value = fields_dict["permission_to_text"].get("value", "").lower()
+            if ptt_value == "yes":
+                student_data["permission_to_text"] = True
+            elif ptt_value == "no":
+                student_data["permission_to_text"] = False
+
+        # Create student record
+        student = upsert_student(student_data)
+        student_id = student["id"]
+
+        log_debug(f"✅ Created student record: {student_id}", service="worker_v3")
+
+    # Create or update student_school_interaction
+    from app.repositories.interactions_repository import check_existing_interaction, update_student_school_interaction
+
+    # Check if interaction already exists
+    existing_interaction = check_existing_interaction(student_id, school_id, event_id)
+
+    interaction_data = {
+        "student_id": student_id,
+        "school_id": school_id,
+        "event_id": event_id,
+        "user_id": user_id,
+        "fields": fields_dict,
+        "source_method": "universal_card",
+        "review_status": result.metadata.get("review_status", "needs_review"),
+        "image_path": image_path,  # Include image path so UI can display the card
+        "updated_at": now
+    }
+
+    # Add reviewed_at if status is reviewed
+    if interaction_data["review_status"] == "reviewed":
+        interaction_data["reviewed_at"] = now
+
+    if existing_interaction:
+        # Update existing interaction
+        interaction_id = existing_interaction["id"]
+        interaction = update_student_school_interaction(interaction_id, interaction_data)
+        log_debug(f"✅ Updated existing student_school_interaction: {interaction_id}", {
+            "student_id": student_id,
+            "serial_number": serial_number,
+            "review_status": interaction_data["review_status"]
+        }, service="worker_v3")
+    else:
+        # Create new interaction
+        interaction_data["created_at"] = now
+        interaction = create_student_school_interaction(interaction_data)
+
+    log_debug(f"✅ Created student_school_interaction: {interaction['id']}", {
+        "student_id": student_id,
+        "serial_number": serial_number,
+        "review_status": interaction_data["review_status"],
+        "skipped_gemini": result.metadata.get("skipped_gemini", False)
+    }, service="worker_v3")
+
+    # Update job status to complete (skip if job doesn't exist, e.g., in tests)
+    try:
+        update_processing_job(supabase_client, job_id, {"status": "complete"})
+    except Exception as e:
+        log_debug(f"Note: Could not update processing job (may not exist): {e}", service="worker_v3")
+
+
 def download_from_supabase(file_url: str, local_path: str) -> None:
     """Download file from Supabase storage to local path"""
     try:
@@ -249,13 +384,22 @@ def process_job_v3(job: Dict[str, Any]) -> None:
         trimmed_storage_path = original_image_path
         log_debug(f"[IMAGE DEBUG] ✅ Using original image as 'trimmed' image: {trimmed_storage_path}", service="worker_v3")
         
-        # Step 4: Save results to database
+        # Step 4: Save results to database (V1 vs V2 routing)
         log_debug("=== STEP 4: SAVE TO DATABASE ===", service="worker_v3")
-        
+
         # Convert FieldData objects back to dict format for database
         fields_dict = {}
         for key, field_data in result.fields.items():
             fields_dict[key] = field_data.to_dict()
+
+        # Check if this is a V2 universal card (has serial number)
+        serial_number = result.metadata.get("serial_number")
+        is_v2_card = serial_number is not None
+
+        if is_v2_card:
+            log_debug(f"🆕 V2 Universal Card detected (serial: {serial_number}) - Saving to student_school_interactions", service="worker_v3")
+        else:
+            log_debug("📋 V1 Legacy card (no serial) - Saving to reviewed_data", service="worker_v3")
         
         # LOG CRITICAL INFO: Track what's happening with first_name and last_name
         log_debug("🔍 CRITICAL: Review status before save", {
@@ -287,34 +431,50 @@ def process_job_v3(job: Dict[str, Any]) -> None:
             log_debug(f"[IMAGE DEBUG] ⚠️ WARNING: Original image path looks like local path, not storage path: {original_image_path}", service="worker_v3")
             log_debug(f"[IMAGE DEBUG] This may cause UI image loading issues", service="worker_v3")
         
-        review_data = {
-            "document_id": job_id,
-            "fields": fields_dict,
-            "school_id": school_id,
-            "user_id": user_id,
-            "event_id": event_id,
-            "image_path": original_image_path,
-            "trimmed_image_path": trimmed_storage_path,
-            "review_status": result.metadata.get("review_status"),
-            "created_at": now,
-            "updated_at": now
-        }
-        
-        log_debug(f"[IMAGE DEBUG] Final review_data image paths:", {
-            "image_path": review_data["image_path"],
-            "trimmed_image_path": review_data["trimmed_image_path"]
-        }, service="worker_v3")
-        
-        log_debug("🔍 CRITICAL: Saving review data", {
-            "document_id": job_id,
-            "field_count": len(fields_dict),
-            "review_status": review_data["review_status"],
-            "fields_needing_review": result.metadata.get("fields_needing_review"),
-            "pipeline_version": "v3",
-            "timestamp": now
-        }, service="worker_v3")
-        
-        update_job_status_with_review(supabase_client, job_id, "complete", review_data)
+        if is_v2_card:
+            # V2 Path: Save to student_school_interactions
+            save_v2_universal_card(
+                supabase_client=supabase_client,
+                job_id=job_id,
+                result=result,
+                fields_dict=fields_dict,
+                school_id=school_id,
+                user_id=user_id,
+                event_id=event_id,
+                serial_number=serial_number,
+                image_path=original_image_path,
+                now=now
+            )
+        else:
+            # V1 Path: Save to reviewed_data (legacy)
+            review_data = {
+                "document_id": job_id,
+                "fields": fields_dict,
+                "school_id": school_id,
+                "user_id": user_id,
+                "event_id": event_id,
+                "image_path": original_image_path,
+                "trimmed_image_path": trimmed_storage_path,
+                "review_status": result.metadata.get("review_status"),
+                "created_at": now,
+                "updated_at": now
+            }
+
+            log_debug(f"[IMAGE DEBUG] Final review_data image paths:", {
+                "image_path": review_data["image_path"],
+                "trimmed_image_path": review_data["trimmed_image_path"]
+            }, service="worker_v3")
+
+            log_debug("🔍 CRITICAL: Saving V1 review data", {
+                "document_id": job_id,
+                "field_count": len(fields_dict),
+                "review_status": review_data["review_status"],
+                "fields_needing_review": result.metadata.get("fields_needing_review"),
+                "pipeline_version": "v3",
+                "timestamp": now
+            }, service="worker_v3")
+
+            update_job_status_with_review(supabase_client, job_id, "complete", review_data)
         
         log_debug(f"✅ Job {job_id} completed successfully with new pipeline", service="worker_v3")
         log_debug("=== PROCESSING JOB V3 END ===", service="worker_v3")
