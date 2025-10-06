@@ -67,15 +67,26 @@ async def create_event_service(payload):
 
 async def update_event_service(event_id: str, payload, user):
     if not is_admin(user):
-        log_debug("Only admins can update event names", service="events")
-        raise HTTPException(status_code=403, detail="Only admins can update event names.")
+        log_debug("Only admins can update events", service="events")
+        raise HTTPException(status_code=403, detail="Only admins can update events.")
     try:
         supabase_client = get_supabase_client()
     except Exception as e:
         log_debug(f"Database client not available: {e}", service="events")
         return JSONResponse(status_code=503, content={"error": "Database client not available."})
     try:
-        result = update_event_db(supabase_client, event_id, {"name": payload.name})
+        # Build update dict with only provided fields
+        update_data = {}
+        if payload.name is not None:
+            update_data["name"] = payload.name
+        if payload.date is not None:
+            update_data["date"] = payload.date
+        if hasattr(payload, 'slate_event_id'):
+            update_data["slate_event_id"] = payload.slate_event_id
+
+        log_debug(f"UPDATE EVENT DEBUG - Updating event {event_id} with data: {update_data}", service="events")
+
+        result = update_event_db(supabase_client, event_id, update_data)
         if hasattr(result, 'error') and result.error:
             log_debug(f"Error updating event {event_id}: {result.error}", service="events")
             raise Exception(result.error)
