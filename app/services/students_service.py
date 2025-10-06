@@ -16,6 +16,7 @@ from app.repositories.reviewed_data_repository import upsert_reviewed_data
 from app.repositories.interactions_repository import (
     create_student_school_interaction,
     check_existing_interaction,
+    update_student_school_interaction,
 )
 from app.utils.qr_utils import qr_png_data_uri
 from app.utils.retry_utils import log_debug
@@ -222,18 +223,13 @@ async def scan_student(
     if not s:
         raise HTTPException(status_code=400, detail="Invalid token")
 
-    # Check if this student has already been scanned for this event
-    existing = check_existing_interaction(s['id'], school_id, event_id)
-    if existing:
-        raise HTTPException(
-            status_code=409,
-            detail="This student has already been scanned for this event"
-        )
-
     # Convert student columns to V2 field structure
     fields = _student_to_reviewed_fields(s)
 
-    # Create student_school_interaction (V2)
+    # Check if this student has already been scanned for this event
+    existing = check_existing_interaction(s['id'], school_id, event_id)
+
+    # Create or update student_school_interaction (V2)
     interaction_data = {
         "student_id": s['id'],
         "school_id": school_id,
@@ -242,6 +238,7 @@ async def scan_student(
         "source_method": "qr_code",
         "review_status": "reviewed",  # QR codes are auto-approved (student entered data)
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Add optional fields only if provided
@@ -252,7 +249,15 @@ async def scan_student(
     if notes:
         interaction_data["notes"] = notes
 
-    interaction = create_student_school_interaction(interaction_data)
+    if existing:
+        # Update existing interaction
+        interaction = update_student_school_interaction(existing["id"], interaction_data)
+        log_debug(f"Updated existing QR scan interaction: {existing['id']}", service="students")
+    else:
+        # Create new interaction
+        interaction_data["created_at"] = datetime.now(timezone.utc).isoformat()
+        interaction = create_student_school_interaction(interaction_data)
+        log_debug(f"Created new QR scan interaction: {interaction['id']}", service="students")
     return {
         "success": True,
         "interaction_id": interaction["id"],
