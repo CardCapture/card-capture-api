@@ -331,18 +331,22 @@ class CardProcessingPipeline:
         fields = extraction_result.fields.copy()
         enhancer_results = []
         
-        # Sync field requirements based on discovered fields
-        discovered_fields = list(fields.keys())
-        log_debug("Syncing field requirements", {
-            "discovered_field_count": len(discovered_fields)
-        }, service="pipeline")
-        
-        try:
-            updated_requirements = sync_field_requirements(context.school_id, discovered_fields)
-            # Update context with latest requirements
-            context = context.with_metadata(updated_field_requirements=updated_requirements)
-        except Exception as e:
-            log_debug(f"Failed to sync field requirements: {e}", service="pipeline")
+        # DISABLED: Auto-discovery of new fields
+        # This was automatically adding every detected field to school's card_fields,
+        # causing junk fields to appear in settings. Schools will now manage their
+        # field list manually via settings UI.
+        #
+        # discovered_fields = list(fields.keys())
+        # log_debug("Syncing field requirements", {
+        #     "discovered_field_count": len(discovered_fields)
+        # }, service="pipeline")
+        #
+        # try:
+        #     updated_requirements = sync_field_requirements(context.school_id, discovered_fields)
+        #     # Update context with latest requirements
+        #     context = context.with_metadata(updated_field_requirements=updated_requirements)
+        # except Exception as e:
+        #     log_debug(f"Failed to sync field requirements: {e}", service="pipeline")
         
         # Run each enhancer
         for enhancer in self.enhancers:
