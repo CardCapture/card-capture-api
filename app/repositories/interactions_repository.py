@@ -76,3 +76,28 @@ def check_existing_interaction(
     )
     rows = getattr(response, "data", None) or []
     return rows[0] if rows else None
+
+
+def update_student_school_interaction(interaction_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Update an existing student_school_interaction record."""
+    sb = get_supabase_client()
+
+    try:
+        response = (
+            sb.table("student_school_interactions")
+            .update(update_data)
+            .eq("id", interaction_id)
+            .execute()
+        )
+        rows = getattr(response, "data", None) or []
+
+        if rows:
+            return rows[0]
+
+        # Fallback
+        return update_data
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update interaction: {str(e)}"
+        )

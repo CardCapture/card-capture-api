@@ -232,7 +232,12 @@ def save_v2_universal_card(
 
         log_debug(f"✅ Created student record: {student_id}", service="worker_v3")
 
-    # Create student_school_interaction
+    # Create or update student_school_interaction
+    from app.repositories.interactions_repository import check_existing_interaction, update_student_school_interaction
+
+    # Check if interaction already exists
+    existing_interaction = check_existing_interaction(student_id, school_id, event_id)
+
     interaction_data = {
         "student_id": student_id,
         "school_id": school_id,
@@ -242,7 +247,6 @@ def save_v2_universal_card(
         "source_method": "universal_card",
         "review_status": result.metadata.get("review_status", "needs_review"),
         "image_path": image_path,  # Include image path so UI can display the card
-        "created_at": now,
         "updated_at": now
     }
 
@@ -250,7 +254,19 @@ def save_v2_universal_card(
     if interaction_data["review_status"] == "reviewed":
         interaction_data["reviewed_at"] = now
 
-    interaction = create_student_school_interaction(interaction_data)
+    if existing_interaction:
+        # Update existing interaction
+        interaction_id = existing_interaction["id"]
+        interaction = update_student_school_interaction(interaction_id, interaction_data)
+        log_debug(f"✅ Updated existing student_school_interaction: {interaction_id}", {
+            "student_id": student_id,
+            "serial_number": serial_number,
+            "review_status": interaction_data["review_status"]
+        }, service="worker_v3")
+    else:
+        # Create new interaction
+        interaction_data["created_at"] = now
+        interaction = create_student_school_interaction(interaction_data)
 
     log_debug(f"✅ Created student_school_interaction: {interaction['id']}", {
         "student_id": student_id,
