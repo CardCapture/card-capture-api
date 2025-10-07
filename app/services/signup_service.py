@@ -294,7 +294,7 @@ async def create_reviewed_data_record(
         "user_id": user_id,
         "event_id": event_id,
         "image_path": image_path,
-        "review_status": "needs_human_review",  # Require human review for handwriting OCR
+        "review_status": "needs_review",  # Require human review for handwriting OCR
         "upload_type": "signup_sheet",  # New field to distinguish from inquiry cards
         "created_at": now,
         "updated_at": now

@@ -162,7 +162,7 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
                     break
 
         # Use the frontend status if provided, otherwise determine based on fields
-        review_status = frontend_status if frontend_status else ("needs_human_review" if any_required_field_needs_review else "reviewed")
+        review_status = frontend_status if frontend_status else ("needs_review" if any_required_field_needs_review else "reviewed")
 
         # Filter out combined fields before saving
         filtered_fields = filter_combined_fields(current_fields_data)
@@ -334,7 +334,7 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
                     break
         
         # Update review status
-        review_status = "needs_human_review" if any_required_field_needs_review else "reviewed"
+        review_status = "needs_review" if any_required_field_needs_review else "reviewed"
         
         # Filter out combined fields before saving
         filtered_fields = filter_combined_fields(current_fields_data)
