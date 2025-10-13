@@ -29,6 +29,116 @@ def generate_device_token() -> Tuple[str, str]:
     token_hash = hash_token(token)
     return token, token_hash
 
+def log_mfa_event(
+    user_id: str,
+    event_type: str,
+    device_token_hash: str = None,
+    metadata: dict = None,
+    request: Request = None
+):
+    """Log MFA events for audit trail"""
+    try:
+        event_data = {
+            'user_id': user_id,
+            'event_type': event_type,
+            'device_token_hash': device_token_hash,
+            'metadata': metadata or {},
+            'created_at': datetime.now(timezone.utc).isoformat()
+        }
+
+        if request:
+            event_data['ip_address'] = request.client.host if request.client else None
+            event_data['user_agent'] = request.headers.get('user-agent')
+
+        get_supabase_client().table('mfa_events').insert(event_data).execute()
+        print(f"✅ MFA event logged: {event_type} for user {user_id}")
+    except Exception as e:
+        print(f"⚠️ Failed to log MFA event: {str(e)}")
+        # Don't fail the main operation if logging fails
+
+def check_rate_limit(
+    user_id: str,
+    attempt_type: str,
+    max_attempts: int = 5,
+    window_minutes: int = 15
+) -> tuple[bool, int]:
+    """
+    Check if user has exceeded rate limit
+
+    Returns:
+        tuple: (is_allowed: bool, attempts_remaining: int)
+    """
+    try:
+        supabase = get_supabase_client()
+
+        # Get current rate limit record
+        result = supabase.table('mfa_rate_limits') \
+            .select('*') \
+            .eq('user_id', user_id) \
+            .eq('attempt_type', attempt_type) \
+            .execute()
+
+        now = datetime.now(timezone.utc)
+
+        if not result.data:
+            # First attempt, create record
+            supabase.table('mfa_rate_limits').insert({
+                'user_id': user_id,
+                'attempt_type': attempt_type,
+                'attempt_count': 1,
+                'window_start': now.isoformat()
+            }).execute()
+            print(f"✅ Rate limit: First attempt for {user_id} ({attempt_type})")
+            return True, max_attempts - 1
+
+        record = result.data[0]
+        window_start = datetime.fromisoformat(record['window_start'].replace('Z', '+00:00'))
+        window_end = window_start + timedelta(minutes=window_minutes)
+
+        # Check if window has expired
+        if now > window_end:
+            # Window expired, reset counter
+            supabase.table('mfa_rate_limits') \
+                .update({
+                    'attempt_count': 1,
+                    'window_start': now.isoformat()
+                }) \
+                .eq('user_id', user_id) \
+                .eq('attempt_type', attempt_type) \
+                .execute()
+            print(f"✅ Rate limit: Window expired, reset counter for {user_id}")
+            return True, max_attempts - 1
+
+        current_count = record['attempt_count']
+
+        # Check if limit exceeded
+        if current_count >= max_attempts:
+            time_remaining = (window_end - now).total_seconds() / 60
+            print(f"🚫 Rate limit exceeded for {user_id} ({attempt_type}): {current_count}/{max_attempts}, {time_remaining:.1f}min remaining")
+            log_mfa_event(user_id, 'rate_limit_exceeded', metadata={
+                'attempt_type': attempt_type,
+                'attempts': current_count,
+                'time_remaining_minutes': round(time_remaining, 1)
+            })
+            return False, 0
+
+        # Increment attempt count
+        new_count = current_count + 1
+        supabase.table('mfa_rate_limits') \
+            .update({'attempt_count': new_count}) \
+            .eq('user_id', user_id) \
+            .eq('attempt_type', attempt_type) \
+            .execute()
+
+        remaining = max_attempts - new_count
+        print(f"✅ Rate limit: Attempt {new_count}/{max_attempts} for {user_id} ({attempt_type}), {remaining} remaining")
+        return True, remaining
+
+    except Exception as e:
+        print(f"⚠️ Rate limit check failed: {str(e)}")
+        # Fail open - allow the request if rate limiting fails
+        return True, max_attempts
+
 class MFAService:
     """Centralized MFA service for all operations"""
     
@@ -312,25 +422,39 @@ async def verify_enrollment(
         
         # Update database to mark MFA as enabled (use upsert to handle missing rows)
         print(f"[MFA Verify] Updating database for user {user_id}")
-        
+
         # Get the phone number from the MFA factor or from the request
         # First try to get existing settings
         existing_settings = get_supabase_client().table('user_mfa_settings') \
             .select('*') \
             .eq('user_id', user_id) \
             .execute()
-        
+
         phone_number = existing_settings.data[0]['phone_number'] if existing_settings.data else None
-        
+
         get_supabase_client().table('user_mfa_settings').upsert({
             'user_id': user_id,
             'phone_number': phone_number,
             'mfa_enabled': True,
             'phone_verified': True,
             'enrollment_completed_at': datetime.now(timezone.utc).isoformat(),
+            'mfa_enrolled_at': datetime.now(timezone.utc).isoformat(),
             'updated_at': datetime.now(timezone.utc).isoformat()
         }).execute()
-        
+
+        # Log enrollment completion
+        log_mfa_event(user_id, 'enrollment_complete', metadata={'phone_verified': True}, request=request)
+
+        # Mark MFA as verified for this session (enrollment counts as verification)
+        try:
+            get_supabase_client().table('profiles').update({
+                'mfa_verified_at': datetime.now(timezone.utc).isoformat()
+            }).eq('id', user_id).execute()
+            print(f"[MFA Verify Enrollment] Set mfa_verified_at for user {user_id}")
+        except Exception as e:
+            print(f"[MFA Verify Enrollment] Warning: Failed to set mfa_verified_at: {e}")
+            # Don't fail the request if this update fails
+
         # Return the new session if provided
         response_data = {
             "success": True,
@@ -410,6 +534,9 @@ async def verify_enrollment(
             if device_token_to_use:
                 response_data['device_token'] = device_token_to_use
                 response_data['device_expires_at'] = expires_at.isoformat()
+                # Log device trust
+                token_hash_for_log = hashlib.sha256(device_token_to_use.encode()).hexdigest()
+                log_mfa_event(user_id, 'device_trusted', device_token_hash=token_hash_for_log, metadata={'device_name': device_name}, request=request)
         
         if 'access_token' in verify_result:
             response_data['session'] = {
@@ -438,9 +565,19 @@ async def create_challenge(
     try:
         user_id = current_user['id']
         token = MFAService.get_user_token(request)
-        
+
         print(f"[MFA Challenge] Creating for user {user_id}")
-        
+
+        # Check rate limit (5 attempts per 15 minutes)
+        is_allowed, remaining = check_rate_limit(user_id, 'challenge', max_attempts=5, window_minutes=15)
+        if not is_allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many challenge requests. Please try again in 15 minutes."
+            )
+
+        print(f"[MFA Challenge] Rate limit check passed, {remaining} attempts remaining")
+
         # Check if MFA is enabled
         settings = get_supabase_client().table('user_mfa_settings') \
             .select('*') \
@@ -506,12 +643,35 @@ async def verify_mfa(
     try:
         user_id = current_user['id']
         token = MFAService.get_user_token(request)
-        
+
         print(f"[MFA Verify Login] User {user_id} verifying")
-        
+
+        # Check rate limit (5 attempts per 15 minutes)
+        is_allowed, remaining = check_rate_limit(user_id, 'verification', max_attempts=5, window_minutes=15)
+        if not is_allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many verification attempts. Please try again in 15 minutes."
+            )
+
+        print(f"[MFA Verify Login] Rate limit check passed, {remaining} attempts remaining")
+
         # Verify the challenge
         verify_result = await MFAService.verify_challenge(token, factor_id, challenge_id, code)
-        
+
+        # Log successful verification
+        log_mfa_event(user_id, 'verification_success', request=request)
+
+        # Mark MFA as verified for this session
+        try:
+            get_supabase_client().table('profiles').update({
+                'mfa_verified_at': datetime.now(timezone.utc).isoformat()
+            }).eq('id', user_id).execute()
+            print(f"[MFA Verify] Set mfa_verified_at for user {user_id}")
+        except Exception as e:
+            print(f"[MFA Verify] Warning: Failed to set mfa_verified_at: {e}")
+            # Don't fail the request if this update fails
+
         response_data = {
             "success": True,
             "user": current_user
@@ -616,6 +776,9 @@ async def verify_mfa(
                 response_data['device_token'] = device_token_to_use
                 response_data['device_expires_at'] = expires_at.isoformat()
                 print(f"[MFA Verify] Device token provided for user {user_id}")
+                # Log device trust
+                token_hash_for_log = hash_token(device_token_to_use)
+                log_mfa_event(user_id, 'device_trusted', device_token_hash=token_hash_for_log, request=request)
         
         return JSONResponse(content=response_data)
         
