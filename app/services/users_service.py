@@ -225,10 +225,8 @@ async def delete_user_service(user_id: str, user):
         log_debug(f"Error deleting user {user_id}: {str(e)}", service="users")
         log_debug(f"Error type: {type(e)}", service="users")
         log_debug(f"Error details: {e.__dict__ if hasattr(e, '__dict__') else 'No details available'}", service="users")
-        
-        # Check if it's a foreign key constraint error
-        error_str = str(e).lower()
-        if "foreign key" in error_str or "constraint" in error_str or "referenced" in error_str:
-            raise HTTPException(status_code=409, detail="Cannot delete user: user has associated data that must be removed first")
-        
+
+        # Note: Foreign key constraint errors should no longer occur since we added CASCADE DELETE
+        # to all relevant tables (processing_jobs, user_mfa_settings, trusted_devices, etc.)
+
         raise HTTPException(status_code=500, detail=f"Database error deleting user: {str(e)}") 
