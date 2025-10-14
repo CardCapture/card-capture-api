@@ -32,7 +32,7 @@ class TranscriptValidator:
             issues.append("Total credits do not match sum of course credits; fix credits and totals.")
 
         # Exclusions: pass/fail (P/Pass/CR) should not count in GPA
-        pf_included = [c for c in courses if (c.get("final_grade_letter", "").upper() in ["P", "CR"]) and c.get("include_in_gpa", True)]
+        pf_included = [c for c in courses if (str(c.get("final_grade_letter") or "").upper() in ["P", "CR"]) and c.get("include_in_gpa", True)]
         if pf_included:
             issues.append("Pass/CR courses must be excluded from GPA.")
 

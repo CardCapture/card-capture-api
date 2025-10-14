@@ -19,13 +19,18 @@ You are an expert transcript parser for US high school academic records.
 
 TASK: Extract all student and course information from this transcript image/PDF into structured JSON, then recalculate GPA using weighted 4.0 scale.
 
+IMPORTANT: If courses are split by semester (Part 1/Part 2, Semester 1/Semester 2), COMBINE them into single course entries:
+- Average the semester grades to get final_grade_numeric
+- Sum the credits from both parts
+- Store individual semester grades in semester_grades object
+
 GPA CALCULATION RULES (CRITICAL):
-- Use weighted 4.0 scale: A (90-100) = 4 points, B (80-89) = 3 points, C (70-79) = 2 points, D (60-69) = 1 point, F (0-59) = 0 points
-- WEIGHT BONUS CALCULATION: For advanced courses with grade 60+, ADD +1.0 to base points BEFORE multiplying by credits
-  Example: Honors English with 74 (C grade) = 2.0 base + 1.0 bonus = 3.0 points per credit
+- Use weighted 4.0 scale: A (90-100+, including A-, A, A+) = 4 points, B (80-89, including B-, B, B+) = 3 points, C (70-79, including C-, C, C+) = 2 points, D (60-69, including D-, D, D+) = 1 point, F (0-59) = 0 points
+- WEIGHT BONUS CALCULATION: For advanced courses with grade 60+ (D or better), ADD +1.0 to base points
+  Example: Dual Credit English with B grade = 3.0 base + 1.0 bonus = 4.0 total points
 - Advanced courses marked as: H, Q, D, P, I, K or labeled Honors, Pre-AP, AP, IB, Pre-IB, Dual Credit
-- Include grades 9th-12th only, UNLESS course marked with J (then exclude)
-- Include ALL courses with grades, even if student received no credit
+- Include grades 9th-12th PLUS any courses marked with J (J means counts toward high school credit even if taken before 9th grade)
+- Include ALL courses with grades, even if student received no credit for the class
 - Use final/average grade for calculation (not individual semester grades)
 
 COMMON COURSE FLAGS & MEANINGS:
@@ -35,7 +40,7 @@ COMMON COURSE FLAGS & MEANINGS:
 - H = Honors (+1.0 weight if D or better)
 - Q = Pre-AP/Pre-Advanced Placement (+1.0 weight if D or better)
 - K = Pre-IB (+1.0 weight if D or better)
-- J = Junior high/exclude from HS GPA calculation
+- J = Counts toward high school credit (INCLUDE in GPA even if taken before 9th grade)
 - R = Repeated course (include in GPA)
 - Z = Distance learning (include in GPA)
 - * = Credit denied (include grade in GPA even if no credit awarded)
@@ -90,15 +95,16 @@ EXTRACT INTO THIS JSON:
 
 CRITICAL INSTRUCTIONS:
 1. ALWAYS include courses with grades even if credits_earned = 0
-2. Weight bonus ONLY applies if final grade is 60+ (D or better)
-3. Exclude courses marked with J from GPA calculation
+2. Weight bonus of +1.0 ONLY applies if final grade is 60+ (D or better)
+3. INCLUDE courses marked with J in GPA calculation (J means counts toward HS credit)
 4. Look for legends/keys that define flag meanings
 5. Use final/average grade, not semester grades, for GPA calculation
 6. Mark advanced courses correctly - look for H,Q,D,P,I,K flags or Honors/AP/IB/Pre-AP/Dual Credit in course names
-7. Calculate total quality points: (base_grade_points + weight_bonus) × credits
-8. WEIGHT BONUS EXAMPLE: AP Biology 85 grade = 3.0 base + 1.0 bonus = 4.0 points, then 4.0 × 1.0 credit = 4.0 quality points
-9. If unsure about a grade or flag, note it in parsing_notes and set confidence < 0.8
-10. KEEP parsing_notes brief and avoid quotes inside note text to prevent JSON errors
+7. ALL advanced course types (Honors, Pre-AP, AP, IB, Pre-IB, Dual Credit) get +1.0 weight bonus if grade is D or better
+8. Calculate total quality points: (base_grade_points + weight_bonus) × credits
+9. WEIGHT BONUS EXAMPLE: Dual Credit History with A grade = 4.0 base + 1.0 bonus = 5.0 total points, then 5.0 × 1.0 credit = 5.0 quality points
+10. If unsure about a grade or flag, note it in parsing_notes and set confidence < 0.8
+11. KEEP parsing_notes brief and avoid quotes inside note text to prevent JSON errors
 
 Return ONLY valid JSON. Ensure all quotes in text fields are properly escaped.
 """
@@ -184,6 +190,13 @@ class GeminiTranscriptService:
             
             # Parse JSON response
             transcript_data = self._parse_response(response.text)
+
+            # Normalize field names and combine semester splits
+            try:
+                transcript_data = self._normalize_and_combine_courses(transcript_data)
+            except Exception as e:
+                log_debug(f"Error during normalization/combination: {e}", service="transcript_parser")
+
             transcript_data = self._apply_default_policy_and_recalc(transcript_data)
 
             # Validate and auto-retry once with targeted corrections
@@ -200,6 +213,7 @@ class GeminiTranscriptService:
                 if retry_resp and retry_resp.text:
                     try:
                         corrected = self._parse_response(retry_resp.text)
+                        corrected = self._normalize_and_combine_courses(corrected)
                         corrected = self._apply_default_policy_and_recalc(corrected)
                     except Exception as e:
                         log_debug(f"Retry parse failed, using original output: {e}", service="transcript_parser")
@@ -224,13 +238,13 @@ class GeminiTranscriptService:
         if any("Pass/CR" in s for s in issues):
             fixes.append("Exclude courses with final grade letter P/CR from GPA and recalculate.")
         if any("Junior-high" in s for s in issues):
-            fixes.append("Exclude courses with grade_level J from GPA and totals.")
+            fixes.append("INCLUDE courses marked with J (they count toward HS credit).")
         if any("Calculated GPA" in s for s in issues):
             fixes.append("Ensure calculated_gpa is within 0.0–5.0 range.")
         if any("Total credits" in s for s in issues):
             fixes.append("Ensure total_credits equals the sum of credits_attempted for include_in_gpa=true courses.")
         if any("Weights must only apply" in s for s in issues):
-            fixes.append("Apply weight bonuses only when final grade >= 60 (D or better).")
+            fixes.append("Apply +1.0 weight bonuses only when final grade >= 60 (D or better).")
 
         if not fixes:
             fixes.append("Recheck inclusion rules and recompute GPA/credits accurately.")
@@ -250,20 +264,128 @@ class GeminiTranscriptService:
             "Corrections to apply:\n- " + "\n- ".join(fixes) + prior_block
         )
 
+    def _normalize_and_combine_courses(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize field names and combine semester-split courses.
+
+        Some transcripts list each course twice (Part 1 and Part 2 for each semester).
+        This function:
+        1. Normalizes field names (grade_value -> final_grade_numeric, etc.)
+        2. Combines semester splits by averaging grades and summing credits
+        """
+        courses = data.get("courses", [])
+
+        # Step 1: Normalize field names
+        for course in courses:
+            # Map alternate field names to standard schema
+            if "grade_value" in course and "final_grade_numeric" not in course:
+                course["final_grade_numeric"] = course.get("grade_value")
+
+            if "credit_earned" in course and "credits_earned" not in course:
+                course["credits_earned"] = course.get("credit_earned")
+
+            if "credit_earned" in course and "credits_attempted" not in course:
+                course["credits_attempted"] = course.get("credit_earned")
+
+            if "course_description" in course and "course_name" not in course:
+                course["course_name"] = course.get("course_description")
+
+            if "course" in course and "course_code" not in course:
+                course["course_code"] = course.get("course")
+
+        # Step 2: Detect and combine semester-split courses
+        # Check if this is a semester-split format (has "part" field)
+        has_parts = any("part" in c for c in courses)
+
+        if has_parts:
+            log_debug("Detected semester-split format, combining courses...", service="transcript_parser")
+
+            # Group courses by service_id or course_code + course_name
+            # NOTE: Don't include year because parts span calendar years (Dec 2024 + May 2025)
+            course_groups = {}
+            for course in courses:
+                # Create a key to identify matching courses
+                service_id = course.get("service_id", "")
+                course_code = course.get("course_code", "")
+                course_name = course.get("course_name", "")
+
+                # Use service_id as primary key, fallback to course_code + name
+                if service_id:
+                    key = f"svc_{service_id}"
+                else:
+                    key = f"code_{course_code}_{course_name}"
+
+                if key not in course_groups:
+                    course_groups[key] = []
+                course_groups[key].append(course)
+
+            # Combine grouped courses
+            combined_courses = []
+            for key, group in course_groups.items():
+                if len(group) == 1:
+                    # Single course, just use as is
+                    combined_courses.append(group[0])
+                else:
+                    # Multiple parts, combine them
+                    combined = self._combine_course_parts(group)
+                    combined_courses.append(combined)
+
+            log_debug(f"Combined {len(courses)} semester entries into {len(combined_courses)} courses",
+                     service="transcript_parser")
+            data["courses"] = combined_courses
+
+        return data
+
+    def _combine_course_parts(self, parts: list) -> Dict[str, Any]:
+        """Combine multiple course parts (semesters) into one course entry."""
+        if not parts:
+            return {}
+
+        # Use first part as base
+        combined = parts[0].copy()
+
+        # Average numeric grades
+        grades = [p.get("final_grade_numeric") or p.get("grade_value") for p in parts if p.get("final_grade_numeric") or p.get("grade_value")]
+        if grades:
+            combined["final_grade_numeric"] = round(sum(grades) / len(grades), 1)
+
+        # Sum credits
+        credits_earned = sum([float(p.get("credits_earned") or p.get("credit_earned") or 0) for p in parts])
+        credits_attempted = sum([float(p.get("credits_attempted") or p.get("credit_earned") or 0) for p in parts])
+        combined["credits_earned"] = credits_earned
+        combined["credits_attempted"] = credits_attempted
+
+        # Store semester grades
+        semester_grades = {}
+        for i, part in enumerate(parts, 1):
+            grade = part.get("final_grade_numeric") or part.get("grade_value")
+            if grade:
+                semester_grades[f"s{i}"] = grade
+        combined["semester_grades"] = semester_grades
+
+        # Combine raw text
+        raw_texts = [p.get("raw_text", "") for p in parts if p.get("raw_text")]
+        combined["raw_text"] = " | ".join(raw_texts) if raw_texts else None
+
+        # Remove the "part" field since it's now combined
+        combined.pop("part", None)
+
+        return combined
+
     def _apply_default_policy_and_recalc(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Apply default inclusion rules and recalc GPA for PoC consistency."""
         courses = data.get("courses", [])
 
         def is_pe_or_ath(name: str) -> bool:
-            if not name:
+            if not name or name is None:
                 return False
-            n = name.upper()
+            n = str(name).upper()
             pe_tokens = [" PE ", " P.E", " ATH ", "ATHL", "ATHLET", "SUBATH", "PES", "PHYSICAL EDUCATION"]
             return any(tok.strip() in n for tok in pe_tokens) or n.startswith("PE") or n.startswith("P.E")
 
         def is_elective(name: Optional[str], code: Optional[str]) -> bool:
-            n = (name or "").upper()
-            c = (code or "").upper()
+            n = str(name or "").upper()
+            c = str(code or "").upper()
             # CTE courses often start with 13xxxxx (Texas TEKS)
             if c.startswith("13"):
                 return True
@@ -281,8 +403,8 @@ class GeminiTranscriptService:
             return any(tok in n for tok in elective_tokens)
 
         def letter_points(grade_letter: Optional[str], grade_numeric: Optional[float]) -> float:
-            if grade_letter:
-                g = grade_letter.upper()
+            if grade_letter and grade_letter is not None:
+                g = str(grade_letter).upper()
                 if g == "A" or (grade_numeric is not None and grade_numeric >= 90):
                     return 4.0
                 if g == "B" or (grade_numeric is not None and 80 <= grade_numeric < 90):
@@ -306,60 +428,86 @@ class GeminiTranscriptService:
             return 0.0
 
         def weight_bonus_for(course: Dict[str, Any]) -> float:
-            name = (course.get("course_name") or "") + " " + (course.get("raw_text") or "")
-            name_u = name.upper()
+            # Check if grade is D or better (60+)
             grade_num = course.get("final_grade_numeric")
-            if grade_num is None or grade_num < 60:
+            grade_letter_raw = course.get("final_grade_letter")
+            grade_letter = str(grade_letter_raw or "").upper() if grade_letter_raw else ""
+
+            # Determine if grade is 60+ (D or better)
+            passing_grade = False
+            if grade_num is not None and grade_num >= 60:
+                passing_grade = True
+            elif grade_letter and grade_letter in ["A", "B", "C", "D"]:
+                passing_grade = True
+
+            if not passing_grade:
                 return 0.0
-            # AP/IB/Dual = +1.0
-            if any(k in name_u for k in [" AP ", " AP", " IB ", "IB ", " DUAL ", " DC ", "DUAL CREDIT"]):
+
+            # ALL advanced courses get +1.0 weight bonus (customer requirement)
+            # Check for: H, Q, D, P, I, K flags or Honors, Pre-AP, AP, IB, Pre-IB, Dual Credit
+            # Use raw_text to check for flag markers (more reliable than course name)
+            raw_text = course.get("raw_text")
+            raw = str(raw_text or "").upper() if raw_text else ""
+
+            # Check for colon-prefixed flags (most reliable)
+            if any(flag in raw for flag in [":H", ":Q", ":D", ":P", ":I", ":K"]):
+                # Exclude :J which is just for HS credit, not weight
+                if ":J" in raw and not any(f in raw for f in [":H", ":Q", ":D", ":P", ":I", ":K"]):
+                    return 0.0
                 return 1.0
-            # Honors/Pre-AP = +0.5
-            if any(k in name_u for k in ["HONORS", " PRE-AP", " PREAP", " H ", " Q "]):
-                return 0.5
+
+            # Check for keyword markers
+            course_name = course.get("course_name")
+            name_str = str(course_name or "") if course_name else ""
+            name_and_raw = name_str + " " + raw
+            name_u = name_and_raw.upper()
+            advanced_keywords = [
+                "HONORS", "PRE-AP", "PREAP", "PRE AP",
+                "DUAL CREDIT", "DUAL-CREDIT",
+                " AP ", "^AP ", " AP$",  # AP (avoid matching in middle of words)
+                " IB ", "^IB ", " IB$",   # IB
+                "PRE-IB", "PREIB", "PRE IB"
+            ]
+            if any(k in name_u for k in advanced_keywords):
+                return 1.0
+
             # fallback to advanced_course flag
             if course.get("advanced_course") is True:
-                # conservative default: treat as honors if unknown
-                return 0.5
+                return 1.0
             return 0.0
 
         total_qp = 0.0
         total_cr = 0.0
 
         for c in courses:
-            # default include
+            # Customer requirement: Include ALL courses with grades from 9-12
+            # PLUS courses marked with J (count toward HS credit even if taken before 9th grade)
             include = True
             reasons = []
 
-            # Exclude junior high
-            if c.get("grade_level") == "J":
-                include = False
-                reasons.append("junior_high")
-            # Exclude pass/fail
-            fl = (c.get("final_grade_letter") or "").upper()
+            # ONLY exclude pass/fail courses (no numeric grade to calculate)
+            fl_raw = c.get("final_grade_letter")
+            fl = str(fl_raw or "").upper() if fl_raw else ""
             if fl in ["P", "CR"]:
                 include = False
                 reasons.append("pass_fail")
-            # Exclude zero-credit rows
-            ca = float(c.get("credits_attempted") or 0)
-            ce = float(c.get("credits_earned") or 0)
-            if ca <= 0 or ce <= 0:
+
+            # Exclude courses with no grade information at all
+            grade_num = c.get("final_grade_numeric")
+            if grade_num is None and not c.get("final_grade_letter"):
                 include = False
-                reasons.append("zero_credit")
-            # Exclude PE/Athletics by default
-            if is_pe_or_ath(c.get("course_name")):
-                include = False
-                reasons.append("pe_athletics")
-            # Exclude electives by default
-            if include and is_elective(c.get("course_name"), c.get("course_code")):
-                include = False
-                reasons.append("elective")
+                reasons.append("no_grade")
 
             c["include_in_gpa"] = include
             if not include:
                 c["exclusion_reason"] = ",".join(reasons) if reasons else "policy"
 
             if include:
+                ca = float(c.get("credits_attempted") or 0)
+                # Use credits_attempted for GPA calculation (customer includes all courses with grades)
+                if ca <= 0:
+                    ca = 1.0  # Default to 1.0 credit if not specified but has a grade
+
                 base = letter_points(c.get("final_grade_letter"), c.get("final_grade_numeric"))
                 bonus = weight_bonus_for(c)
                 qp = (base + bonus) * ca
@@ -367,9 +515,10 @@ class GeminiTranscriptService:
                 total_cr += ca
 
             # Store debug calc regardless for reconciliation output
+            ca_debug = float(c.get("credits_attempted") or 1.0)
             c["base_points"] = letter_points(c.get("final_grade_letter"), c.get("final_grade_numeric"))
             c["weight_points"] = weight_bonus_for(c)
-            c["quality_points"] = (c["base_points"] + c["weight_points"]) * ca
+            c["quality_points"] = (c["base_points"] + c["weight_points"]) * ca_debug
 
         calc_gpa = round(total_qp / total_cr, 3) if total_cr > 0 else 0.0
         data["gpa_calculation"] = {

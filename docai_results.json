@@ -1,8 +1,0 @@
-{
-  "name": { "value": "John Doe", "vision_confidence": 0.98 },
-  "address": { "value": "123 Main St", "vision_confidence": 0.95 },
-  "city_state": { "value": "Springfield, IL", "vision_confidence": 0.92 },
-  "zip_code": { "value": "62704", "vision_confidence": 0.9 },
-  "phone": { "value": "555-1234", "vision_confidence": 0.88 },
-  "email": { "value": "john@example.com", "vision_confidence": 0.93 }
-}
