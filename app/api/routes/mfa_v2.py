@@ -218,16 +218,22 @@ class MFAService:
             return response.json()
     
     @staticmethod
-    async def create_challenge(token: str, factor_id: str) -> Dict[str, Any]:
+    async def create_challenge(token: str, factor_id: str, user_ip: str = None) -> Dict[str, Any]:
         """Create a challenge for a factor"""
         async with httpx.AsyncClient() as client:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "apikey": SUPABASE_ANON_KEY,
+                "Content-Type": "application/json"
+            }
+
+            # Forward user's IP address to prevent IP mismatch errors
+            if user_ip:
+                headers["X-Forwarded-For"] = user_ip
+
             response = await client.post(
                 f"{SUPABASE_URL}/auth/v1/factors/{factor_id}/challenge",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "apikey": SUPABASE_ANON_KEY,
-                    "Content-Type": "application/json"
-                },
+                headers=headers,
                 json={}
             )
             
@@ -241,16 +247,22 @@ class MFAService:
             return response.json()
     
     @staticmethod
-    async def verify_challenge(token: str, factor_id: str, challenge_id: str, code: str) -> Dict[str, Any]:
+    async def verify_challenge(token: str, factor_id: str, challenge_id: str, code: str, user_ip: str = None) -> Dict[str, Any]:
         """Verify a challenge with a code"""
         async with httpx.AsyncClient() as client:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "apikey": SUPABASE_ANON_KEY,
+                "Content-Type": "application/json"
+            }
+
+            # Forward user's IP address to prevent IP mismatch errors
+            if user_ip:
+                headers["X-Forwarded-For"] = user_ip
+
             response = await client.post(
                 f"{SUPABASE_URL}/auth/v1/factors/{factor_id}/verify",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "apikey": SUPABASE_ANON_KEY,
-                    "Content-Type": "application/json"
-                },
+                headers=headers,
                 json={
                     "challenge_id": challenge_id,
                     "code": code
@@ -337,10 +349,34 @@ async def enroll_mfa(
         
         if verified_phone_factors:
             print(f"[MFA Enroll] User already has verified phone factor")
+
+            # Update/create user_mfa_settings with phone number (may be missing if cleaned up)
+            existing_settings = get_supabase_client().table('user_mfa_settings') \
+                .select('*') \
+                .eq('user_id', user_id) \
+                .execute()
+
+            if existing_settings.data:
+                get_supabase_client().table('user_mfa_settings').update({
+                    'phone_number': phone_number,
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }).eq('user_id', user_id).execute()
+            else:
+                get_supabase_client().table('user_mfa_settings').insert({
+                    'user_id': user_id,
+                    'phone_number': phone_number,
+                    'mfa_enabled': False,
+                    'phone_verified': False
+                }).execute()
+
             # Just create a challenge for the existing factor
             factor = verified_phone_factors[0]
-            challenge = await MFAService.create_challenge(token, factor['id'])
-            
+            # Get user's real IP address
+            user_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+            if user_ip and "," in user_ip:
+                user_ip = user_ip.split(",")[0].strip()
+            challenge = await MFAService.create_challenge(token, factor['id'], user_ip)
+
             return JSONResponse(content={
                 "success": True,
                 "factor_id": factor['id'],
@@ -362,10 +398,14 @@ async def enroll_mfa(
         # Now create a new factor with the provided phone number
         print(f"[MFA Enroll] Creating new factor with phone: {phone_number}")
         factor = await MFAService.create_factor(token, phone_number)
-        
+
         # Create challenge
         print(f"[MFA Enroll] Creating challenge for factor {factor['id']}")
-        challenge = await MFAService.create_challenge(token, factor['id'])
+        # Get user's real IP address
+        user_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+        if user_ip and "," in user_ip:
+            user_ip = user_ip.split(",")[0].strip()
+        challenge = await MFAService.create_challenge(token, factor['id'], user_ip)
         
         # Update database settings
         existing_settings = get_supabase_client().table('user_mfa_settings') \
@@ -416,9 +456,14 @@ async def verify_enrollment(
         token = MFAService.get_user_token(request)
         
         print(f"[MFA Verify] User {user_id} verifying factor {factor_id}")
-        
+
+        # Get user's real IP address
+        user_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+        if user_ip and "," in user_ip:
+            user_ip = user_ip.split(",")[0].strip()
+
         # Verify the challenge
-        verify_result = await MFAService.verify_challenge(token, factor_id, challenge_id, code)
+        verify_result = await MFAService.verify_challenge(token, factor_id, challenge_id, code, user_ip)
         
         # Update database to mark MFA as enabled (use upsert to handle missing rows)
         print(f"[MFA Verify] Updating database for user {user_id}")
@@ -431,6 +476,14 @@ async def verify_enrollment(
             .execute()
 
         phone_number = existing_settings.data[0]['phone_number'] if existing_settings.data else None
+
+        # CRITICAL: Validate phone_number exists before enabling MFA
+        if not phone_number or phone_number.strip() == '':
+            print(f"[MFA Verify] ERROR: Cannot enable MFA without phone number for user {user_id}")
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot enable MFA without a valid phone number. Please re-enroll."
+            )
 
         get_supabase_client().table('user_mfa_settings').upsert({
             'user_id': user_id,
@@ -584,18 +637,28 @@ async def create_challenge(
             .eq('user_id', user_id) \
             .single() \
             .execute()
-        
+
         if not settings.data or not settings.data.get('mfa_enabled'):
             print(f"[MFA Challenge] MFA not enabled for user {user_id}")
             return JSONResponse(content={"mfa_required": False})
-        
+
+        # DEFENSIVE CHECK: If MFA is enabled but no phone number exists, force re-enrollment
+        phone_number = settings.data.get('phone_number', '')
+        if not phone_number or phone_number.strip() == '':
+            print(f"[MFA Challenge] MFA enabled but no phone number for user {user_id} - requiring enrollment")
+            return JSONResponse(content={
+                "mfa_required": True,
+                "error": "Phone number missing. Please complete enrollment.",
+                "needs_enrollment": True
+            })
+
         # Get verified factors
         factors = await MFAService.get_user_factors(token)
         phone_factors = [
-            f for f in factors 
+            f for f in factors
             if f.get('factor_type') == 'phone' and f.get('status') == 'verified'
         ]
-        
+
         if not phone_factors:
             print(f"[MFA Challenge] No verified phone factors for user {user_id}")
             return JSONResponse(content={
@@ -606,8 +669,12 @@ async def create_challenge(
         
         # Create challenge for the first phone factor
         factor = phone_factors[0]
-        challenge = await MFAService.create_challenge(token, factor['id'])
-        
+        # Get user's real IP address
+        user_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+        if user_ip and "," in user_ip:
+            user_ip = user_ip.split(",")[0].strip()
+        challenge = await MFAService.create_challenge(token, factor['id'], user_ip)
+
         # Update last challenge timestamp
         get_supabase_client().table('user_mfa_settings').update({
             'last_challenge_at': datetime.now(timezone.utc).isoformat()
@@ -656,8 +723,13 @@ async def verify_mfa(
 
         print(f"[MFA Verify Login] Rate limit check passed, {remaining} attempts remaining")
 
+        # Get user's real IP address
+        user_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "127.0.0.1")
+        if user_ip and "," in user_ip:
+            user_ip = user_ip.split(",")[0].strip()
+
         # Verify the challenge
-        verify_result = await MFAService.verify_challenge(token, factor_id, challenge_id, code)
+        verify_result = await MFAService.verify_challenge(token, factor_id, challenge_id, code, user_ip)
 
         # Log successful verification
         log_mfa_event(user_id, 'verification_success', request=request)
