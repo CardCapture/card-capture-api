@@ -19,47 +19,133 @@ You are an expert transcript parser for US high school academic records.
 
 TASK: Extract all student and course information from this transcript image/PDF into structured JSON, then recalculate GPA using weighted 4.0 scale.
 
-IMPORTANT: If courses are split by semester (Part 1/Part 2, Semester 1/Semester 2), COMBINE them into single course entries:
-- Average the semester grades to get final_grade_numeric
-- Sum the credits from both parts
-- Store individual semester grades in semester_grades object
+---
 
-GPA CALCULATION RULES (CRITICAL):
-- Use weighted 4.0 scale: A (90-100+, including A-, A, A+) = 4 points, B (80-89, including B-, B, B+) = 3 points, C (70-79, including C-, C, C+) = 2 points, D (60-69, including D-, D, D+) = 1 point, F (0-59) = 0 points
-- WEIGHT BONUS CALCULATION: For advanced courses with grade 60+ (D or better), ADD +1.0 to base points
-  Example: Dual Credit English with B grade = 3.0 base + 1.0 bonus = 4.0 total points
-- Advanced courses marked as: H, Q, D, P, I, K or labeled Honors, Pre-AP, AP, IB, Pre-IB, Dual Credit
-- Include grades 9th-12th PLUS any courses marked with J (J means counts toward high school credit even if taken before 9th grade)
-- Include ALL courses with grades, even if student received no credit for the class
-- Use final/average grade for calculation (not individual semester grades)
+🚦 CRITICAL: YOU MUST RETURN EXACTLY THIS JSON STRUCTURE WITH THESE EXACT FIELD NAMES
 
-COMMON COURSE FLAGS & MEANINGS:
+Do NOT abbreviate, rename, or change field names. Use these exact keys:
+
+{
+  "student": {
+    "name": "<string>",                    // REQUIRED - use this exact key
+    "date_of_birth": "<string>",           // REQUIRED - format: YYYY-MM-DD
+    "student_id": "<string>",              // use this exact key, not "id" or "sid"
+    "school": "<string>",                  // use this exact key, not "school_name"
+    "district": "<string>",                // use this exact key
+    "reported_gpa": <number or null>,      // use this exact key, not "gpa"
+    "class_rank": <number or null>,        // use this exact key, not "rank"
+    "class_size": <number or null>         // use this exact key, not "size"
+  },
+  "courses": [
+    {
+      "school_year": "<string>",           // REQUIRED - format: "2022-23", not "year"
+      "term": "<string>",                  // use this exact key
+      "grade_level": "<string>",           // use this exact key, not "level" or "grade"
+      "course_code": "<string>",           // use this exact key, not "code"
+      "course_name": "<string>",           // REQUIRED - use this exact key, NEVER "name"
+      "credits_attempted": <number>,       // REQUIRED - use this exact key, NEVER "credit" or "credits"
+      "credits_earned": <number>,          // REQUIRED - use this exact key, NEVER "credit" or "credits"
+      "final_grade_numeric": <number>,     // REQUIRED - use this exact key, NEVER "grade" or "avg"
+      "final_grade_letter": "<string>",    // use this exact key, not "letter"
+      "semester_grades": {                 // OPTIONAL - use for semester splits
+        "s1": <number>,                    // semester 1 grade
+        "s2": <number>                     // semester 2 grade
+      },
+      "advanced_course": <boolean>,        // use this exact key
+      "weight_eligible": <boolean>,        // use this exact key
+      "include_in_gpa": <boolean>,         // use this exact key
+      "raw_text": "<string>",              // use this exact key
+      "confidence": <number>               // use this exact key, 0.0 to 1.0
+    }
+  ],
+  "gpa_calculation": {
+    "total_quality_points": <number>,      // use this exact key
+    "total_credits": <number>,             // use this exact key
+    "calculated_gpa": <number>,            // REQUIRED - use this exact key
+    "courses_included": <number>,          // use this exact key
+    "weighted_courses": <number>           // use this exact key
+  },
+  "parsing_notes": ["<string>", ...]       // use this exact key
+}
+
+✅ REQUIRED FIELD NAMES (DO NOT CHANGE):
+- "course_name" (NOT "name")
+- "final_grade_numeric" (NOT "grade", "avg", or "grade_value")
+- "credits_attempted" (NOT "credit" or "credits")
+- "credits_earned" (NOT "credit" or "credits")
+- "calculated_gpa" (NOT "gpa")
+
+---
+
+📋 GPA CALCULATION RULES:
+
+1. Use weighted 4.0 scale:
+   - A (90-100+) = 4 points
+   - B (80-89) = 3 points
+   - C (70-79) = 2 points
+   - D (60-69) = 1 point
+   - F (0-59) = 0 points
+
+2. WEIGHT BONUS: For advanced courses with grade 60+ (D or better), ADD +1.0 to base points
+   Example: Dual Credit English with B grade = 3.0 base + 1.0 bonus = 4.0 total points
+
+3. Advanced courses marked as: H, Q, D, P, I, K or labeled Honors, Pre-AP, AP, IB, Pre-IB, Dual Credit
+
+4. Include grades 9th-12th PLUS any courses marked with J (counts toward HS credit)
+
+5. Include ALL courses with grades, even if credits_earned = 0
+
+---
+
+🔍 COMMON COURSE FLAGS:
 - P, AP = Advanced Placement (+1.0 weight if D or better)
 - I, IB = International Baccalaureate (+1.0 weight if D or better)
 - D, DC = Dual Credit (+1.0 weight if D or better)
 - H = Honors (+1.0 weight if D or better)
-- Q = Pre-AP/Pre-Advanced Placement (+1.0 weight if D or better)
+- Q = Pre-AP (+1.0 weight if D or better)
 - K = Pre-IB (+1.0 weight if D or better)
-- J = Counts toward high school credit (INCLUDE in GPA even if taken before 9th grade)
+- J = Counts toward high school credit (INCLUDE in GPA)
 - R = Repeated course (include in GPA)
-- Z = Distance learning (include in GPA)
-- * = Credit denied (include grade in GPA even if no credit awarded)
-- L = Local credit only (include in GPA)
 
-TRANSCRIPT FORMATS TO RECOGNIZE:
+---
+
+📝 TRANSCRIPT FORMATS TO RECOGNIZE:
 1. Texas AAR: "22/23 ENG 1  85  87  86  1.00  P" (year/course/S1/S2/avg/credits/flags)
 2. Semester blocks: Course lists under semester headers
 3. Grid format: Courses in tables with semester columns
-4. Course codes: (S)1234567, subject abbreviations like ENG, ALG, BIO
 
-EXTRACT INTO THIS JSON:
+---
+
+⚠️ SEMESTER SPLIT HANDLING:
+If courses are split by semester (Part 1/Part 2, Semester 1/Semester 2), COMBINE them:
+- Average the semester grades → final_grade_numeric
+- Sum the credits → credits_attempted and credits_earned
+- Store individual semester grades in semester_grades object
+
+Example:
+Input: "ENG 1 A - 85" and "ENG 1 B - 87" (both 0.5 credits)
+Output: ONE course with final_grade_numeric=86, credits_attempted=1.0, semester_grades={s1:85, s2:87}
+
+---
+
+✅ CRITICAL REMINDERS:
+1. Return ONLY valid JSON (no markdown, no extra text)
+2. Use the EXACT field names specified above
+3. Never abbreviate or rename fields
+4. Set confidence < 0.8 if unsure about a grade or flag
+5. Keep parsing_notes brief and avoid quotes inside note text
+6. Ensure all text field quotes are properly escaped
+
+---
+
+📤 Example Output:
 {
   "student": {
-    "name": "Last, First Middle",
-    "date_of_birth": "YYYY-MM-DD",
-    "student_id": "ID number",
-    "school": "School Name",
-    "district": "District Name",
+    "name": "Smith, John A",
+    "date_of_birth": "2006-05-15",
+    "student_id": "123456",
+    "school": "Lincoln High School",
+    "district": "Austin ISD",
     "reported_gpa": 3.45,
     "class_rank": 25,
     "class_size": 400
@@ -67,12 +153,12 @@ EXTRACT INTO THIS JSON:
   "courses": [
     {
       "school_year": "2022-23",
-      "term": "Fall",
+      "term": "Full Year",
       "grade_level": "11",
       "course_code": "ENG301",
       "course_name": "English 3",
       "credits_attempted": 1.0,
-      "credits_earned": 0.0,
+      "credits_earned": 1.0,
       "final_grade_numeric": 86,
       "final_grade_letter": "B",
       "semester_grades": {"s1": 85, "s2": 87},
@@ -93,20 +179,7 @@ EXTRACT INTO THIS JSON:
   "parsing_notes": ["Found legend defining course flags", "All grades clearly visible"]
 }
 
-CRITICAL INSTRUCTIONS:
-1. ALWAYS include courses with grades even if credits_earned = 0
-2. Weight bonus of +1.0 ONLY applies if final grade is 60+ (D or better)
-3. INCLUDE courses marked with J in GPA calculation (J means counts toward HS credit)
-4. Look for legends/keys that define flag meanings
-5. Use final/average grade, not semester grades, for GPA calculation
-6. Mark advanced courses correctly - look for H,Q,D,P,I,K flags or Honors/AP/IB/Pre-AP/Dual Credit in course names
-7. ALL advanced course types (Honors, Pre-AP, AP, IB, Pre-IB, Dual Credit) get +1.0 weight bonus if grade is D or better
-8. Calculate total quality points: (base_grade_points + weight_bonus) × credits
-9. WEIGHT BONUS EXAMPLE: Dual Credit History with A grade = 4.0 base + 1.0 bonus = 5.0 total points, then 5.0 × 1.0 credit = 5.0 quality points
-10. If unsure about a grade or flag, note it in parsing_notes and set confidence < 0.8
-11. KEEP parsing_notes brief and avoid quotes inside note text to prevent JSON errors
-
-Return ONLY valid JSON. Ensure all quotes in text fields are properly escaped.
+Respond ONLY with valid JSON matching this exact structure.
 """
 
 
@@ -280,6 +353,53 @@ class GeminiTranscriptService:
             # Map alternate field names to standard schema
             if "grade_value" in course and "final_grade_numeric" not in course:
                 course["final_grade_numeric"] = course.get("grade_value")
+
+            # Handle "grade" field (may be string or numeric)
+            if "grade" in course and "final_grade_numeric" not in course:
+                grade = course.get("grade")
+                if grade is not None:
+                    # Convert to float if it's a string
+                    try:
+                        course["final_grade_numeric"] = float(grade)
+                    except (ValueError, TypeError):
+                        # If it's a letter grade, store in final_grade_letter
+                        if isinstance(grade, str) and grade.upper() in ['A', 'B', 'C', 'D', 'F', 'P', 'CR']:
+                            course["final_grade_letter"] = grade
+                        pass
+
+            # Handle "avg" field (common in Texas AAR format)
+            if "avg" in course and "final_grade_numeric" not in course:
+                avg = course.get("avg")
+                # If avg is null/missing but we have s1/s2, calculate it
+                if avg is None and ("s1" in course or "s2" in course):
+                    s1 = course.get("s1")
+                    s2 = course.get("s2")
+                    if s1 is not None and s2 is not None:
+                        avg = (float(s1) + float(s2)) / 2
+                    elif s1 is not None:
+                        avg = s1
+                    elif s2 is not None:
+                        avg = s2
+                if avg is not None:
+                    course["final_grade_numeric"] = avg
+
+            # Handle "name" field (should be course_name)
+            if "name" in course and "course_name" not in course:
+                course["course_name"] = course.get("name")
+
+            # Handle "credits" field (plural)
+            if "credits" in course:
+                if "credits_earned" not in course:
+                    course["credits_earned"] = course.get("credits")
+                if "credits_attempted" not in course:
+                    course["credits_attempted"] = course.get("credits")
+
+            # Handle "credit" field (singular)
+            if "credit" in course:
+                if "credits_earned" not in course:
+                    course["credits_earned"] = course.get("credit")
+                if "credits_attempted" not in course:
+                    course["credits_attempted"] = course.get("credit")
 
             if "credit_earned" in course and "credits_earned" not in course:
                 course["credits_earned"] = course.get("credit_earned")
