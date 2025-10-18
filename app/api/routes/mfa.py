@@ -620,93 +620,95 @@ async def verify_mfa(
         is_test_code = code == '121212'
         
         print(f"[MFA Verify] Phone: {phone_number}, Is test phone: {is_test_phone}, Is test code: {is_test_code}")
-        
-        # Verify the code using session-aware client  
-        session_client = get_session_aware_supabase_client(request)
-        
-        try:
-            # For SMS verification, we need to use the challenge_id
-            if challenge_id:
-                print(f"[MFA Verify] Verifying with challenge_id: {challenge_id}")
-                # SMS verification with challenge
-                auth_response = session_client.auth.mfa.verify({
-                    'factor_id': factor_id,
-                    'challenge_id': challenge_id,
-                    'code': code
-                })
-            else:
-                print(f"[MFA Verify] Verifying without challenge_id (TOTP mode)")
-                # TOTP verification (no challenge_id needed)
-                auth_response = session_client.auth.mfa.verify({
-                    'factor_id': factor_id,
-                    'code': code
-                })
-            
-            print(f"[MFA Verify] Auth response: {auth_response}")
-            
-        except Exception as verify_error:
-            print(f"[MFA Verify] Verification error: {verify_error}")
-            if is_test_phone and is_test_code:
-                # For test phone with test code, simulate successful verification
-                print(f"[MFA Verify] Using test bypass for login verification")
-                # Create a mock successful response
-                auth_response = type('MockResponse', (), {
-                    'data': {
-                        'user': current_user,
-                        'session': {'access_token': 'test_token', 'refresh_token': 'test_refresh'}
-                    },
-                    'error': None
-                })()
-            else:
-                raise HTTPException(status_code=400, detail="Invalid verification code")
-        
-        if hasattr(auth_response, 'error') and auth_response.error and not (is_test_phone and is_test_code):
-            raise HTTPException(status_code=400, detail="Invalid verification code")
-        elif hasattr(auth_response, 'error') and auth_response.error and is_test_phone and is_test_code:
+
+        # Verify the code using direct HTTP call (matches pattern in challenge endpoint)
+        import httpx
+        access_token = request.headers.get("Authorization").split(" ", 1)[1]
+
+        # Prepare verification request
+        verify_payload = {"code": code}
+        if challenge_id:
+            verify_payload["challenge_id"] = challenge_id
+            print(f"[MFA Verify] Verifying with challenge_id: {challenge_id}")
+        else:
+            print(f"[MFA Verify] Verifying without challenge_id (TOTP mode)")
+
+        # Call Supabase API directly (DO NOT include X-Forwarded-For to avoid IP mismatch)
+        verify_response = httpx.post(
+            f"{os.getenv('SUPABASE_URL')}/auth/v1/factors/{factor_id}/verify",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "apikey": os.getenv("SUPABASE_ANON_KEY")
+            },
+            json=verify_payload
+        )
+
+        print(f"[MFA Verify] Verify response status: {verify_response.status_code}")
+        print(f"[MFA Verify] Verify response data: {verify_response.text}")
+
+        # Handle verification response
+        if verify_response.status_code == 200:
+            response_json = verify_response.json()
+            user = response_json.get('user')
+            session = response_json.get('session')
+        elif is_test_phone and is_test_code:
             # For test phone with test code, simulate successful verification
             print(f"[MFA Verify] Using test bypass for login verification")
-            # Create a mock successful response
-            auth_response = type('MockResponse', (), {
-                'data': {
-                    'user': current_user,
-                    'session': {'access_token': 'test_token', 'refresh_token': 'test_refresh'}
-                },
-                'error': None
-            })()
-        
-        user = auth_response.data.get('user')
+            user = current_user
+            session = {'access_token': 'test_token', 'refresh_token': 'test_refresh'}
+        else:
+            error_text = verify_response.text
+            print(f"[MFA Verify] Verification failed: {error_text}")
+            raise HTTPException(status_code=400, detail="Invalid verification code")
+
         if not user:
             raise HTTPException(status_code=400, detail="Authentication failed")
-        
+
+        # Update mfa_verified_at timestamp in profile
+        try:
+            supabase_client.table('profiles').update({
+                'mfa_verified_at': datetime.now(timezone.utc).isoformat()
+            }).eq('id', user['id']).execute()
+            print(f"[MFA Verify] Updated mfa_verified_at for user {user['id']}")
+        except Exception as profile_error:
+            print(f"[MFA Verify] Warning: Failed to update mfa_verified_at: {profile_error}")
+
         response_data = {
             "success": True,
             "user": user,
-            "session": auth_response.data.get('session')
+            "session": session
         }
-        
+
         # If remember device is requested, create a device token
         if remember_device:
-            token, token_hash = generate_device_token()
-            
-            # Get device info from request
-            user_agent = request.headers.get('user-agent', '')
-            ip_address = request.client.host if request.client else None
-            
-            # Store device token (expires in 30 days)
-            expires_at = datetime.now(timezone.utc) + timedelta(days=30)
-            
-            supabase_client.table('user_trusted_devices').insert({
-                'user_id': user['id'],
-                'device_token_hash': token_hash,
-                'device_name': device_name or 'Unknown Device',
-                'user_agent': user_agent,
-                'ip_address': ip_address,
-                'expires_at': expires_at.isoformat()
-            }).execute()
-            
-            response_data['device_token'] = token
-            response_data['device_expires_at'] = expires_at.isoformat()
-        
+            try:
+                token, token_hash = generate_device_token()
+
+                # Get device info from request
+                user_agent = request.headers.get('user-agent', '')
+                ip_address = request.client.host if request.client else None
+
+                # Store device token (expires in 30 days)
+                expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+
+                supabase_client.table('trusted_devices').insert({
+                    'user_id': user['id'],
+                    'device_token_hash': token_hash,
+                    'device_name': device_name or 'Unknown Device',
+                    'user_agent': user_agent,
+                    'ip_address': ip_address,
+                    'expires_at': expires_at.isoformat()
+                }).execute()
+
+                response_data['device_token'] = token
+                response_data['device_expires_at'] = expires_at.isoformat()
+                print(f"[MFA Verify] Device token saved successfully")
+            except Exception as device_error:
+                print(f"[MFA Verify] Warning: Failed to save device token: {device_error}")
+                # Don't fail the entire verification if device token storage fails
+                pass
+
         return JSONResponse(content=response_data)
         
     except Exception as e:
@@ -752,7 +754,7 @@ async def get_mfa_settings(
         settings_result = supabase_client.table('user_mfa_settings').select('*').eq('user_id', user_id).single().execute()
         
         # Get trusted devices
-        devices_result = supabase_client.table('user_trusted_devices').select('*').eq('user_id', user_id).gte('expires_at', datetime.now(timezone.utc).isoformat()).execute()
+        devices_result = supabase_client.table('trusted_devices').select('*').eq('user_id', user_id).gte('expires_at', datetime.now(timezone.utc).isoformat()).execute()
         
         return JSONResponse(content={
             "mfa_enabled": settings_result.data.get('mfa_enabled', False) if settings_result.data else False,
@@ -780,7 +782,7 @@ async def disable_mfa(
         }).eq('user_id', user_id).execute()
         
         # Remove all trusted devices
-        supabase_client.table('user_trusted_devices').delete().eq('user_id', user_id).execute()
+        supabase_client.table('trusted_devices').delete().eq('user_id', user_id).execute()
         
         # Remove backup codes
         supabase_client.table('user_mfa_backup_codes').delete().eq('user_id', user_id).execute()
@@ -805,7 +807,7 @@ async def revoke_device(
         user_id = current_user['id']
         
         # Delete the device
-        supabase_client.table('user_trusted_devices').delete().eq('id', device_id).eq('user_id', user_id).execute()
+        supabase_client.table('trusted_devices').delete().eq('id', device_id).eq('user_id', user_id).execute()
         
         return JSONResponse(content={
             "success": True,
