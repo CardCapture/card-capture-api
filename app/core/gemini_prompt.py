@@ -77,7 +77,7 @@ For every field in the input, return this exact structure:
 
 **Major Field** – CRITICAL: Never change the `major` field value. Always preserve the exact text written on the card. If the card shows "Sports Management", keep it as "Sports Management". Do not set it to null or change it to a mapped value. Field type: "text".
 
-**Mapped Major** – Use the provided valid_majors list to match the `mapped_major` to the major on the card. IMPORTANT: Always preserve the original `major` field value exactly as written on the card - do not change or null it out. Only update the separate `mapped_major` field. If no close match exists in valid_majors, leave `mapped_major` blank and explain. If the original `major` field is empty, default `mapped_major` to "Undecided". Field type: "select" with detected_options being the valid_majors list.
+**Mapped Major** – Use the provided valid_majors list to match the `mapped_major` to the major on the card. IMPORTANT: Always preserve the original `major` field value exactly as written on the card - do not change or null it out. Only update the separate `mapped_major` field. If no close match exists in valid_majors, leave `mapped_major` blank (the system will automatically set it to "Undecided"). If the original `major` field is empty, default `mapped_major` to "Undecided". CRITICAL: The pipe character (|) in major names is part of the major name format (e.g., "Business Administration | BSBA") - do NOT split on it or treat it as a delimiter. Use intelligent matching (e.g., "Business" → "Business Administration | BSBA", "Psych" → "Psychology | BS"). Field type: "select" with detected_options being the valid_majors list.
 
 ---
 
