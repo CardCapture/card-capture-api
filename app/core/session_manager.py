@@ -1,3 +1,4 @@
+import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
@@ -117,16 +118,19 @@ class FormSessionManager:
     
     def set_session_cookie(self, response: Response, token: str):
         """Set session cookie in response"""
+        # Use secure cookies in production (HTTPS), allow HTTP in development
+        is_production = os.getenv("ENVIRONMENT") == "production"
+
         response.set_cookie(
             key=self.COOKIE_NAME,
             value=token,
             max_age=self.SESSION_TTL_MINUTES * 60,
             httponly=True,
-            secure=False,  # Allow HTTP for localhost testing
+            secure=is_production,  # True in production (HTTPS), False in dev (HTTP)
             samesite="lax",
             path="/"
         )
-        log_debug("Session cookie set", service="session_manager")
+        log_debug(f"Session cookie set (secure={is_production})", service="session_manager")
     
     def get_session_from_cookie(self, request: Request) -> Optional[str]:
         """Get session token from cookie"""
