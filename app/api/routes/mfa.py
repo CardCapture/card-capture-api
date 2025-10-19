@@ -70,13 +70,16 @@ async def enroll_mfa(
         session_client = get_session_aware_supabase_client(request)
         user_response = session_client.auth.get_user()
         existing_phone_factor = None
-        
-        if user_response.user and user_response.user.factors:
+
+        # Check if user_response exists and has user data
+        if user_response and user_response.user and user_response.user.factors:
             for factor in user_response.user.factors:
                 if factor.factor_type == 'phone' and factor.status == 'unverified':
                     existing_phone_factor = factor
                     print(f"[MFA Enroll] Found existing unverified phone factor: {factor.id}")
                     break
+        else:
+            print(f"[MFA Enroll] No user response or no factors found. user_response: {user_response}")
         
         # If we have an existing unverified phone factor, just create a challenge
         if existing_phone_factor:
@@ -394,7 +397,19 @@ async def verify_enrollment(
         }).eq('user_id', user_id).execute()
         print(f"[MFA Verify Enrollment] Update result: {update_result}")
         print(f"[MFA Verify Enrollment] Update data: {update_result.data}")
-        
+
+        # CRITICAL: Set mfa_verified_at in profiles table after successful enrollment
+        # This allows the user to access protected routes
+        try:
+            print(f"[MFA Verify Enrollment] Setting mfa_verified_at for user: {user_id}")
+            profile_update_result = supabase_client.table('profiles').update({
+                'mfa_verified_at': datetime.now(timezone.utc).isoformat()
+            }).eq('id', user_id).execute()
+            print(f"[MFA Verify Enrollment] Updated mfa_verified_at for user {user_id}")
+        except Exception as profile_error:
+            print(f"[MFA Verify Enrollment] Warning: Failed to update mfa_verified_at: {profile_error}")
+            # Don't block enrollment if this fails
+
         # Include session data if available
         response_content = {
             "success": True,
