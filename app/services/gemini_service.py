@@ -115,10 +115,10 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
             )
         
         log_debug("Prompt created successfully", service="gemini")
-        
-        # Upload image with retry logic and explicit MIME type
-        log_debug("Uploading image to Gemini...", service="gemini")
-        
+
+        # Read image data directly (avoids upload_file API issues)
+        log_debug("Reading image data for Gemini...", service="gemini")
+
         # Determine MIME type
         mime_type, _ = mimetypes.guess_type(image_path)
         if not mime_type:
@@ -136,31 +136,30 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
                 mime_type = 'image/tiff'
             else:
                 mime_type = 'image/jpeg'  # Default fallback
-        
+
         log_debug(f"Detected MIME type: {mime_type} for file: {image_path}", service="gemini")
-        
+
         try:
-            log_debug("Attempting to upload file to Gemini...", service="gemini")
-            uploaded_file = retry_with_exponential_backoff(
-                func=lambda: genai.upload_file(image_path, mime_type=mime_type),
-                max_retries=3,
-                operation_name="Gemini image upload",
-                service="gemini"
-            )
-            log_debug("Image uploaded successfully to Gemini", service="gemini")
+            log_debug("Reading image file data...", service="gemini")
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
+            log_debug(f"Image data read successfully ({len(image_data)} bytes)", service="gemini")
         except Exception as e:
-            log_debug(f"Failed to upload image to Gemini: {str(e)}", service="gemini")
+            log_debug(f"Failed to read image file: {str(e)}", service="gemini")
             log_debug("Full traceback:", traceback.format_exc(), service="gemini")
             raise
-        
+
         log_debug("Sending request to Gemini...", service="gemini")
         log_debug("Prompt being sent:", prompt, service="gemini")
-        
+
         try:
-            # Generate content with retry logic
+            # Generate content with retry logic - pass image data directly
             log_debug("Attempting to generate content with Gemini...", service="gemini")
             response = retry_with_exponential_backoff(
-                func=lambda: model.generate_content([uploaded_file, prompt]),
+                func=lambda: model.generate_content([
+                    prompt,
+                    {"mime_type": mime_type, "data": image_data}
+                ]),
                 max_retries=3,
                 operation_name="Gemini content generation",
                 service="gemini"
