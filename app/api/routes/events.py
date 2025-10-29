@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from app.controllers.events_controller import (
     create_event_controller,
@@ -44,6 +44,97 @@ async def archive_events(payload: ArchiveEventsPayload):
 @router.delete("/events/{event_id}")
 async def delete_event(event_id: str, user=Depends(get_current_user)):
     return await delete_event_controller(event_id, user)
+
+@router.get("/events-with-stats")
+async def get_events_with_stats(
+    school_id: Optional[str] = Query(None),
+    user=Depends(get_current_user)
+):
+    """
+    Get events with card statistics calculated server-side for performance.
+    This endpoint calculates stats using optimized queries (only 2 DB calls regardless of event count).
+    """
+    try:
+        supabase_client = get_supabase_client()
+
+        # Fetch events for the school
+        events_query = supabase_client.table("events").select("*").order("date", desc=True)
+        if school_id:
+            events_query = events_query.eq("school_id", school_id)
+
+        events_response = events_query.execute()
+        events = events_response.data if events_response.data else []
+
+        if not events:
+            return []
+
+        # Get all event IDs
+        event_ids = [event["id"] for event in events]
+
+        # Fetch ALL V1 cards for these events in ONE query
+        v1_query = supabase_client.table("reviewed_data").select("event_id, review_status")
+        v1_query = v1_query.in_("event_id", event_ids).neq("review_status", "deleted")
+        v1_response = v1_query.execute()
+        v1_cards = v1_response.data if v1_response.data else []
+
+        # Fetch ALL V2 cards for these events in ONE query
+        v2_query = supabase_client.table("student_school_interactions").select("event_id, review_status")
+        v2_query = v2_query.in_("event_id", event_ids).neq("review_status", "archived")
+        v2_response = v2_query.execute()
+        v2_cards = v2_response.data if v2_response.data else []
+
+        # Combine all cards
+        all_cards = v1_cards + v2_cards
+
+        # Group cards by event_id and calculate stats
+        event_stats_map: Dict[str, Dict[str, int]] = {}
+        for event_id in event_ids:
+            event_stats_map[event_id] = {
+                "total_cards": 0,
+                "needs_review": 0,
+                "ready_for_export": 0,
+                "exported": 0,
+                "archived": 0
+            }
+
+        # Aggregate stats
+        for card in all_cards:
+            event_id = card.get("event_id")
+            if event_id not in event_stats_map:
+                continue
+
+            status = card.get("review_status")
+            event_stats_map[event_id]["total_cards"] += 1
+
+            if status == "needs_review":
+                event_stats_map[event_id]["needs_review"] += 1
+            elif status == "reviewed":
+                event_stats_map[event_id]["ready_for_export"] += 1
+            elif status == "exported":
+                event_stats_map[event_id]["exported"] += 1
+            elif status == "archived":
+                event_stats_map[event_id]["archived"] += 1
+
+        # Add stats to events
+        events_with_stats = []
+        for event in events:
+            event_id = event["id"]
+            stats = event_stats_map.get(event_id, {
+                "total_cards": 0,
+                "needs_review": 0,
+                "ready_for_export": 0,
+                "exported": 0,
+                "archived": 0
+            })
+            event_with_stats = {**event, "stats": stats}
+            events_with_stats.append(event_with_stats)
+
+        log_debug(f"Fetched {len(events)} events with stats ({len(all_cards)} total cards)", service="events")
+        return events_with_stats
+
+    except Exception as e:
+        log_debug(f"Get events with stats error: {str(e)}", service="events")
+        raise HTTPException(status_code=500, detail=f"Failed to get events with stats: {str(e)}")
 
 @router.post("/events/{event_id}/codes")
 async def create_event_code(
