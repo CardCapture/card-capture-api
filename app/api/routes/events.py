@@ -85,64 +85,96 @@ async def get_events_with_stats(
 
         # Get all event IDs
         event_ids = [event["id"] for event in events]
-        log_debug(f"Fetched {len(events)} events with IDs: {event_ids[:5]}..." if len(event_ids) > 5 else f"Fetched {len(events)} events with IDs: {event_ids}", service="events")
+        log_debug(f"Fetched {len(events)} events", service="events")
 
-        # Fetch ALL V1 cards for these events in ONE query
-        # IMPORTANT: Supabase client has default 1000 row limit - must use .limit() to get more
-        v1_query = supabase_client.table("reviewed_data").select("event_id, review_status")
-        v1_query = v1_query.in_("event_id", event_ids).neq("review_status", "deleted").limit(100000)
-        v1_response = v1_query.execute()
-        v1_cards = v1_response.data if v1_response.data else []
-        log_debug(f"Fetched {len(v1_cards)} V1 cards from reviewed_data", service="events")
+        # SOLUTION: Use SQL aggregation in database instead of fetching all cards
+        # PostgREST has a 1000-row server limit that can't be overridden
+        # This approach is faster and has no row limits
+        import psycopg2
+        import os
 
-        # Fetch ALL V2 cards for these events in ONE query
-        # IMPORTANT: Supabase client has default 1000 row limit - must use .limit() to get more
-        v2_query = supabase_client.table("student_school_interactions").select("event_id, review_status")
-        v2_query = v2_query.in_("event_id", event_ids).neq("review_status", "archived").limit(100000)
-        v2_response = v2_query.execute()
-        v2_cards = v2_response.data if v2_response.data else []
-        log_debug(f"Fetched {len(v2_cards)} V2 cards from student_school_interactions", service="events")
+        # Get database URL from environment
+        db_url = os.getenv("DATABASE_URL_PRODUCTION") if os.getenv("ENVIRONMENT") == "production" else os.getenv("DATABASE_URL_STAGING")
 
-        # Combine all cards
-        all_cards = v1_cards + v2_cards
-        log_debug(f"Total combined cards: {len(all_cards)}", service="events")
-
-        # Group cards by event_id and calculate stats
         event_stats_map: Dict[str, Dict[str, int]] = {}
-        for event_id in event_ids:
-            event_stats_map[event_id] = {
-                "total_cards": 0,
-                "needs_review": 0,
-                "ready_for_export": 0,
-                "exported": 0,
-                "archived": 0
-            }
 
-        # Aggregate stats
-        for card in all_cards:
-            event_id = card.get("event_id")
-            if event_id not in event_stats_map:
-                log_debug(f"WARNING: Card with event_id {event_id} not in event_stats_map", service="events")
-                continue
+        try:
+            conn = psycopg2.connect(db_url)
+            cur = conn.cursor()
 
-            status = card.get("review_status")
-            event_stats_map[event_id]["total_cards"] += 1
+            # SQL to aggregate V1 cards (reviewed_data) by event and status
+            v1_sql = """
+                SELECT event_id, review_status, COUNT(*) as count
+                FROM reviewed_data
+                WHERE event_id = ANY(%s) AND review_status != 'deleted'
+                GROUP BY event_id, review_status
+            """
+            cur.execute(v1_sql, (event_ids,))
+            v1_stats = cur.fetchall()
 
-            if status == "needs_review":
-                event_stats_map[event_id]["needs_review"] += 1
-            elif status == "reviewed":
-                event_stats_map[event_id]["ready_for_export"] += 1
-            elif status == "exported":
-                event_stats_map[event_id]["exported"] += 1
-            elif status == "archived":
-                event_stats_map[event_id]["archived"] += 1
+            # SQL to aggregate V2 cards (student_school_interactions) by event and status
+            v2_sql = """
+                SELECT event_id, review_status, COUNT(*) as count
+                FROM student_school_interactions
+                WHERE event_id = ANY(%s) AND review_status != 'archived'
+                GROUP BY event_id, review_status
+            """
+            cur.execute(v2_sql, (event_ids,))
+            v2_stats = cur.fetchall()
 
-        # Debug logging for Chapin HS event
-        chapin_event_id = "fbc214f1-97e0-49a2-87aa-b6ee91d4b230"
-        if chapin_event_id in event_stats_map:
-            log_debug(f"DEBUG Chapin HS event stats: {event_stats_map[chapin_event_id]}", service="events")
-            chapin_cards = [c for c in all_cards if c.get("event_id") == chapin_event_id]
-            log_debug(f"DEBUG Chapin HS cards found: {len(chapin_cards)} - statuses: {[c.get('review_status') for c in chapin_cards]}", service="events")
+            cur.close()
+            conn.close()
+
+            # Initialize stats map
+            for event_id in event_ids:
+                event_stats_map[event_id] = {
+                    "total_cards": 0,
+                    "needs_review": 0,
+                    "ready_for_export": 0,
+                    "exported": 0,
+                    "archived": 0
+                }
+
+            # Process V1 stats
+            for event_id, status, count in v1_stats:
+                if event_id in event_stats_map:
+                    event_stats_map[event_id]["total_cards"] += count
+                    if status == "needs_review":
+                        event_stats_map[event_id]["needs_review"] += count
+                    elif status == "reviewed":
+                        event_stats_map[event_id]["ready_for_export"] += count
+                    elif status == "exported":
+                        event_stats_map[event_id]["exported"] += count
+                    elif status == "archived":
+                        event_stats_map[event_id]["archived"] += count
+
+            # Process V2 stats
+            for event_id, status, count in v2_stats:
+                if event_id in event_stats_map:
+                    event_stats_map[event_id]["total_cards"] += count
+                    if status == "needs_review":
+                        event_stats_map[event_id]["needs_review"] += count
+                    elif status == "reviewed":
+                        event_stats_map[event_id]["ready_for_export"] += count
+                    elif status == "exported":
+                        event_stats_map[event_id]["exported"] += count
+                    elif status == "archived":
+                        event_stats_map[event_id]["archived"] += count
+
+            total_cards = sum(stats["total_cards"] for stats in event_stats_map.values())
+            log_debug(f"Calculated stats for {len(events)} events ({total_cards} total cards using SQL aggregation)", service="events")
+
+        except Exception as db_error:
+            log_debug(f"Database aggregation error: {str(db_error)}, falling back to empty stats", service="events")
+            # Initialize empty stats on error
+            for event_id in event_ids:
+                event_stats_map[event_id] = {
+                    "total_cards": 0,
+                    "needs_review": 0,
+                    "ready_for_export": 0,
+                    "exported": 0,
+                    "archived": 0
+                }
 
         # Add stats to events
         events_with_stats = []
