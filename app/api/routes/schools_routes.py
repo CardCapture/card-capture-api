@@ -3,8 +3,9 @@ from app.controllers.schools_controller import get_school_controller
 from app.core.auth import get_current_user
 from app.core.clients import get_supabase_client
 from fastapi.responses import JSONResponse
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import json
+import re
 
 router = APIRouter(tags=["Schools"])
 
@@ -58,4 +59,109 @@ async def update_school_card_fields(school_id: str, payload: Dict[str, Any] = Bo
 
     except Exception as e:
         print(f"❌ Error updating card fields for school {school_id}: {e}")
-        return JSONResponse(status_code=500, content={"error": "Failed to update card fields."}) 
+        return JSONResponse(status_code=500, content={"error": "Failed to update card fields."})
+
+@router.get("/schools/{school_id}/notification-settings")
+async def get_notification_settings(school_id: str, user=Depends(get_current_user)):
+    """
+    Get notification settings for a school.
+    Returns notification_email and notifications_enabled fields.
+    """
+    try:
+        # TENANT ISOLATION: Ensure user can only access their own school
+        user_school_id = user.get("school_id") if user else None
+        if not user_school_id or school_id != user_school_id:
+            return JSONResponse(status_code=403, content={"error": "Access denied. You can only access your own school settings."})
+
+        supabase_client = get_supabase_client()
+
+        # Get notification settings from school record
+        response = supabase_client.table("schools").select(
+            "notification_email, notifications_enabled"
+        ).eq("id", school_id).maybe_single().execute()
+
+        if not response or not response.data:
+            return JSONResponse(status_code=404, content={"error": "School not found."})
+
+        return JSONResponse(status_code=200, content={
+            "notification_email": response.data.get("notification_email"),
+            "notifications_enabled": response.data.get("notifications_enabled", False)
+        })
+
+    except Exception as e:
+        print(f"❌ Error getting notification settings for school {school_id}: {e}")
+        return JSONResponse(status_code=500, content={"error": "Failed to get notification settings."})
+
+@router.put("/schools/{school_id}/notification-settings")
+async def update_notification_settings(
+    school_id: str,
+    payload: Dict[str, Any] = Body(...),
+    user=Depends(get_current_user)
+):
+    """
+    Update notification settings for a school.
+    Expects payload with notification_email and/or notifications_enabled.
+
+    Example payload:
+    {
+        "notification_email": "admissions@school.edu",
+        "notifications_enabled": true
+    }
+    """
+    try:
+        # TENANT ISOLATION: Ensure user can only update their own school
+        user_school_id = user.get("school_id") if user else None
+        if not user_school_id or school_id != user_school_id:
+            return JSONResponse(status_code=403, content={"error": "Access denied. You can only update your own school settings."})
+
+        supabase_client = get_supabase_client()
+
+        # First verify the school exists and user has access
+        school_query = supabase_client.table("schools").select("id").eq("id", school_id).maybe_single().execute()
+        if not school_query or not school_query.data:
+            return JSONResponse(status_code=404, content={"error": "School not found."})
+
+        # Extract and validate notification settings from payload
+        notification_email = payload.get("notification_email")
+        notifications_enabled = payload.get("notifications_enabled")
+
+        # Validate email if provided
+        if notification_email is not None:
+            # Allow None/empty to clear the email
+            if notification_email and notification_email.strip():
+                email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                if not re.match(email_pattern, notification_email):
+                    return JSONResponse(status_code=400, content={"error": "Invalid email format."})
+
+        # Build update payload with only provided fields
+        update_payload = {}
+        if notification_email is not None:
+            # Store None if empty string, otherwise store the email
+            update_payload["notification_email"] = notification_email if notification_email and notification_email.strip() else None
+
+        if notifications_enabled is not None:
+            update_payload["notifications_enabled"] = bool(notifications_enabled)
+
+        if not update_payload:
+            return JSONResponse(status_code=400, content={"error": "No valid fields to update."})
+
+        print(f"[Notification Settings Update] Updating school {school_id} with settings:")
+        print(json.dumps(update_payload, indent=2))
+
+        # Update the school record
+        response = supabase_client.table("schools").update(update_payload).eq("id", school_id).execute()
+
+        if response.data:
+            print(f"✅ Successfully updated notification settings for school {school_id}")
+            return JSONResponse(status_code=200, content={
+                "message": "Notification settings updated successfully",
+                "school_id": school_id,
+                **update_payload
+            })
+        else:
+            print(f"❌ Failed to update notification settings for school {school_id}")
+            return JSONResponse(status_code=500, content={"error": "Failed to update notification settings."})
+
+    except Exception as e:
+        print(f"❌ Error updating notification settings for school {school_id}: {e}")
+        return JSONResponse(status_code=500, content={"error": "Failed to update notification settings."}) 
