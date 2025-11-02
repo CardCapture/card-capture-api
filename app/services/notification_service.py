@@ -195,8 +195,8 @@ class NotificationService:
             card_count = event["card_count"]
             card_text = "card" if card_count == 1 else "cards"
 
-            # Build review link
-            review_url = f"{self.frontend_url}/cards?event_id={event_id}"
+            # Build review link - goes directly to event page
+            review_url = f"{self.frontend_url}/events/{event_id}"
 
             html_parts.append(f"""
             <tr>
@@ -231,7 +231,7 @@ class NotificationService:
             event_name = event["event_name"]
             event_id = event["event_id"]
             card_count = event["card_count"]
-            review_url = f"{self.frontend_url}/cards?event_id={event_id}"
+            review_url = f"{self.frontend_url}/events/{event_id}"
             card_text = "card" if card_count == 1 else "cards"
 
             events_list.append(
@@ -254,7 +254,7 @@ class NotificationService:
             <p>You have <strong>{total_cards} new cards</strong> to review from {event_count} {event_text}:</p>
             <ul>{events_html}</ul>
             <p>
-                <a href="{self.frontend_url}/cards"
+                <a href="{self.frontend_url}"
                    style="background-color: #3b82f6; color: white; padding: 10px 20px;
                           text-decoration: none; border-radius: 5px; display: inline-block;">
                     Go to CardCapture
