@@ -1,4 +1,4 @@
-# This file marks the routes directory as a Python package. 
+# This file marks the routes directory as a Python package.
 
 from .cards import router as cards_router
 from .auth import router as auth_router
@@ -16,6 +16,7 @@ from .registration import router as registration_router
 from .qr import router as qr_router
 from .high_schools import router as high_schools_router
 from .majors import router as majors_router
+from .notifications import router as notifications_router
 
 __all__ = [
     'cards_router',
@@ -34,4 +35,5 @@ __all__ = [
     'qr_router',
     'high_schools_router',
     'majors_router',
+    'notifications_router',
 ] 
