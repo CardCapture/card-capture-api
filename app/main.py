@@ -5,6 +5,7 @@ from app.api.routes.mfa import router as mfa_router
 from app.config import ALLOWED_ORIGINS
 from app.core.error_handling import register_exception_handlers
 
+# Trigger build - reverted to working state
 app = FastAPI(title="Card Scanner API")
 
 register_exception_handlers(app)
