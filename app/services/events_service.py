@@ -66,9 +66,12 @@ async def create_event_service(payload):
         return JSONResponse(status_code=500, content={"error": "Failed to create event."})
 
 async def update_event_service(event_id: str, payload, user):
-    if not is_admin(user):
-        log_debug("Only admins can update events", service="events")
-        raise HTTPException(status_code=403, detail="Only admins can update events.")
+    # Allow admins, recruiters, and reviewers to update events
+    # RLS policies ensure users can only update events from their school
+    user_roles = user.get("role", [])
+    if not any(role in user_roles for role in ["admin", "recruiter", "reviewer"]):
+        log_debug("Only admins, recruiters, and reviewers can update events", service="events")
+        raise HTTPException(status_code=403, detail="Only admins, recruiters, and reviewers can update events.")
     try:
         supabase_client = get_supabase_client()
     except Exception as e:
