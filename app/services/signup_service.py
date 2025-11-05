@@ -10,10 +10,15 @@ import json
 import uuid
 import tempfile
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import google.generativeai as genai
 from app.core.clients import get_supabase_client
 from app.utils.retry_utils import log_debug
+from app.core.signup_enhancement_prompt import build_enhancement_prompt
+from app.services.gemini_service import (
+    calculate_confidence_from_quality,
+    determine_review_from_quality
+)
 
 def download_from_supabase(file_url: str, local_path: str) -> None:
     """Download file from Supabase storage to local path"""
@@ -149,6 +154,75 @@ IMPORTANT:
 
     return base_prompt
 
+
+def build_first_pass_prompt() -> str:
+    """
+    Build first-pass prompt focused on table structure and row integrity.
+    This is optimized for extracting raw data with correct row boundaries.
+    """
+    return """You are analyzing a HANDWRITTEN sign-up sheet table to extract its STRUCTURE and RAW DATA.
+
+YOUR TASK: Extract data row-by-row, prioritizing STRUCTURAL ACCURACY over OCR perfection.
+
+🎯 PRIMARY GOAL: Ensure each student's data stays within their own row.
+
+STEP-BY-STEP PROCESS:
+
+1. IDENTIFY TABLE STRUCTURE:
+   - Locate the header row (column names)
+   - Count the number of body rows with ANY data written in them
+   - Note the visual row boundaries (horizontal lines or white space between rows)
+
+2. FOR EACH ROW (going top to bottom):
+   - Assign it a row_number (1, 2, 3, etc.)
+   - Extract ALL data that appears within that row's horizontal boundaries
+   - If text is on the border between rows, assign it to the row where MOST of the text appears
+   - Extract exactly what you see - don't worry about OCR errors yet
+
+3. COLUMN MAPPING (expected columns from left to right):
+   - Column 1: first_name
+   - Column 2: last_name
+   - Column 3: date_of_birth (or combined with email)
+   - Column 4: email (or combined with date_of_birth)
+   - Column 5: address (may include city/state/zip all together)
+   - Column 6: high_school
+   - Column 7: major
+   - Column 8: graduation_year (often labeled "GRAD YEAR")
+
+4. HANDLING MESSY DATA:
+   - If multiple fields appear in one cell, extract them all into that field (we'll split later)
+   - If a field is completely blank, use empty string ""
+   - If you can't read handwriting clearly, transcribe your best guess
+   - Include the "confidence" field: "high" (clearly readable), "medium" (somewhat unclear), "low" (very messy)
+
+OUTPUT FORMAT - JSON array with one object per row:
+[
+  {
+    "row_number": 1,
+    "first_name": "Bianca",
+    "last_name": "Johnson",
+    "date_of_birth": "7/30/08",
+    "email": "bjohnson@email.com",
+    "address": "10 county Road 454 Lambert MS",
+    "city": "",
+    "state": "",
+    "zip_code": "",
+    "high_school": "LHS",
+    "graduation_year": "26",
+    "major": "nursing",
+    "confidence": "medium"
+  }
+]
+
+CRITICAL RULES:
+- NEVER merge data from multiple rows into one student
+- ALWAYS include row_number
+- Extract what you see, don't over-correct OCR errors yet
+- If in doubt about which row text belongs to, use visual horizontal alignment
+- Return ONLY the JSON array, no markdown, no explanations
+"""
+
+
 async def process_signup_sheet(
     image_path: str, 
     event_id: str, 
@@ -186,59 +260,93 @@ async def process_signup_sheet(
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
             local_image_path = tmp_file.name
 
+        # Fetch field requirements for this school
+        field_requirements = await get_field_requirements(school_id)
+
         try:
             download_from_supabase(image_path, local_image_path)
 
-            # Extract data with Gemini using local file
-            records = await extract_signup_data_with_gemini(local_image_path, valid_majors)
-            
+            # NEW: Two-pass extraction + pipeline enhancement
+            # First pass: Extract table structure and raw data
+            raw_records = await extract_signup_data_first_pass(local_image_path)
+
+            if not raw_records:
+                log_debug("No records extracted from sign-up sheet", service="signup")
+                return {
+                    "success": True,
+                    "records_created": 0,
+                    "document_ids": [],
+                    "message": "No filled rows found in sign-up sheet"
+                }
+
+            # Second pass: Enhance with quality indicators
+            enhanced_records = await enhance_signup_data_second_pass(
+                local_image_path,
+                raw_records,
+                valid_majors
+            )
+
+            # Run through pipeline (6 enhancers: canonical mapping, field splitting,
+            # requirements, data cleaning, address validation, CEEB matching)
+            from app.pipeline.signup_pipeline import SignupSheetPipeline
+
+            pipeline = SignupSheetPipeline()
+            results = await pipeline.process_records(
+                enhanced_records,
+                local_image_path,
+                event_id,
+                school_id,
+                user_id,
+                valid_majors,
+                field_requirements
+            )
+
         finally:
             # Clean up temporary file
             try:
                 os.unlink(local_image_path)
             except Exception:
                 pass  # Ignore cleanup errors
-        
-        if not records:
-            log_debug("No records extracted from sign-up sheet", service="signup")
+
+        if not results:
+            log_debug("No results from pipeline", service="signup")
             return {
                 "success": True,
                 "records_created": 0,
                 "document_ids": [],
-                "message": "No filled rows found in sign-up sheet"
+                "message": "No records generated from pipeline"
             }
-        
-        # Create reviewed_data records
+
+        # Create reviewed_data records from pipeline results
         document_ids = []
-        for i, record in enumerate(records):
+        for i, result in enumerate(results):
             try:
-                document_id = await create_reviewed_data_record(
-                    record, event_id, school_id, user_id, image_path, i + 1
+                document_id = await create_reviewed_data_from_pipeline_result(
+                    result, event_id, school_id, user_id, image_path, i + 1
                 )
                 document_ids.append(document_id)
-                log_debug(f"Created record {i + 1}/{len(records)}", {
+                log_debug(f"Created record {i + 1}/{len(results)}", {
                     "document_id": document_id,
-                    "record": record
+                    "review_status": result.metadata.get('review_status')
                 }, service="signup")
             except Exception as e:
                 log_debug(f"Failed to create record {i + 1}: {str(e)}", {
-                    "record": record,
                     "error": str(e)
                 }, service="signup")
                 # Continue with other records
                 continue
         
         log_debug(f"=== SIGNUP SHEET PROCESSING COMPLETE ===", {
-            "records_extracted": len(records),
+            "records_extracted": len(results),
             "records_created": len(document_ids),
             "document_ids": document_ids
         }, service="signup")
-        
+
         return {
             "success": True,
             "records_created": len(document_ids),
             "document_ids": document_ids,
-            "records_extracted": len(records)
+            "records_extracted": len(results)
         }
         
     except Exception as e:
@@ -323,15 +431,382 @@ async def extract_signup_data_with_gemini(image_path: str, valid_majors: List[st
         log_debug(f"Gemini sign-up sheet processing failed: {str(e)}", service="signup")
         raise
 
-async def create_reviewed_data_record(
-    record: Dict, 
-    event_id: str, 
-    school_id: str, 
+
+async def extract_signup_data_first_pass(image_path: str) -> List[Dict]:
+    """
+    First pass: Extract table structure and raw data with row integrity focus.
+
+    Args:
+        image_path: Path to sign-up sheet image
+
+    Returns:
+        List of raw student records with row_number tracking
+    """
+    log_debug("=== FIRST PASS: STRUCTURE EXTRACTION ===", {
+        "image_path": image_path
+    }, service="signup")
+
+    try:
+        # Configure Gemini
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found in environment variables")
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")  # Using latest model
+
+        # Read image file
+        with open(image_path, 'rb') as f:
+            image_data = f.read()
+
+        # Build first-pass prompt
+        prompt = build_first_pass_prompt()
+
+        log_debug("Sending image to Gemini for first-pass extraction...", service="signup")
+
+        # Process with Gemini
+        response = model.generate_content([
+            prompt,
+            {"mime_type": "image/jpeg", "data": image_data}
+        ])
+
+        log_debug("Received first-pass response from Gemini", {
+            "response_text": response.text[:200] + "..." if len(response.text) > 200 else response.text
+        }, service="signup")
+
+        # Parse JSON response (handle markdown code blocks)
+        try:
+            response_text = response.text.strip()
+
+            # Remove markdown code blocks if present
+            if response_text.startswith('```json'):
+                response_text = response_text.split('```json')[1]
+            if response_text.startswith('```'):
+                response_text = response_text.split('```')[1]
+            if response_text.endswith('```'):
+                response_text = response_text.rsplit('```', 1)[0]
+
+            response_text = response_text.strip()
+            records = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            log_debug(f"Failed to parse first-pass response as JSON: {str(e)}", {
+                "response_text": response.text
+            }, service="signup")
+            raise ValueError(f"Invalid JSON response from Gemini: {str(e)}")
+
+        if not isinstance(records, list):
+            raise ValueError("Expected JSON array from Gemini")
+
+        log_debug(f"=== FIRST PASS COMPLETE ===", {
+            "records_count": len(records)
+        }, service="signup")
+
+        return records
+
+    except Exception as e:
+        log_debug(f"First-pass extraction failed: {str(e)}", service="signup")
+        raise
+
+
+async def enhance_signup_data_second_pass(
+    image_path: str,
+    raw_records: List[Dict],
+    valid_majors: List[str] = None,
+    batch_size: int = 5
+) -> List[Dict]:
+    """
+    Second pass: Enhance extracted data with quality indicators.
+    Reuses inquiry card quality system for consistency.
+
+    Processes records in batches to avoid Gemini token limits.
+    Can handle 20+ students per sheet.
+
+    Args:
+        image_path: Path to sign-up sheet image
+        raw_records: List of raw student records from first pass
+        valid_majors: List of valid majors for mapping
+        batch_size: Number of students to process per Gemini call (default: 5)
+
+    Returns:
+        List of enhanced student records with quality indicators
+    """
+    log_debug("=== SECOND PASS: DATA ENHANCEMENT (BATCHED) ===", {
+        "image_path": image_path,
+        "total_records": len(raw_records),
+        "batch_size": batch_size,
+        "num_batches": (len(raw_records) + batch_size - 1) // batch_size,
+        "valid_majors_count": len(valid_majors) if valid_majors else 0
+    }, service="signup")
+
+    if not raw_records:
+        return []
+
+    # Process records in batches
+    all_enhanced_records = []
+    total_batches = (len(raw_records) + batch_size - 1) // batch_size
+
+    for batch_num in range(total_batches):
+        start_idx = batch_num * batch_size
+        end_idx = min(start_idx + batch_size, len(raw_records))
+        batch = raw_records[start_idx:end_idx]
+
+        log_debug(f"Processing batch {batch_num + 1}/{total_batches}", {
+            "students_in_batch": len(batch),
+            "row_numbers": [r.get('row_number', i+start_idx+1) for i, r in enumerate(batch)]
+        }, service="signup")
+
+        try:
+            # Process this batch
+            enhanced_batch = await _enhance_single_batch(
+                image_path,
+                batch,
+                valid_majors
+            )
+
+            all_enhanced_records.extend(enhanced_batch)
+
+            log_debug(f"✅ Batch {batch_num + 1}/{total_batches} complete", {
+                "records_enhanced": len(enhanced_batch)
+            }, service="signup")
+
+        except Exception as e:
+            log_debug(f"❌ Batch {batch_num + 1}/{total_batches} failed: {str(e)}", {
+                "batch_size": len(batch),
+                "error": str(e)
+            }, service="signup")
+            # Continue with other batches - don't fail entire sheet
+            # Add placeholders for failed batch
+            for record in batch:
+                all_enhanced_records.append(record)  # Use raw record as fallback
+
+    log_debug(f"=== SECOND PASS COMPLETE (ALL BATCHES) ===", {
+        "total_records_enhanced": len(all_enhanced_records),
+        "batches_processed": total_batches
+    }, service="signup")
+
+    return all_enhanced_records
+
+
+async def _enhance_single_batch(
+    image_path: str,
+    batch_records: List[Dict],
+    valid_majors: List[str] = None
+) -> List[Dict]:
+    """
+    Enhance a single batch of student records.
+    Internal helper for batch processing.
+
+    Args:
+        image_path: Path to sign-up sheet image
+        batch_records: Batch of raw student records
+        valid_majors: List of valid majors for mapping
+
+    Returns:
+        List of enhanced student records for this batch
+    """
+    try:
+        # Configure Gemini
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found in environment variables")
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+
+        # Read image file
+        with open(image_path, 'rb') as f:
+            image_data = f.read()
+
+        # Build enhancement prompt with batch records
+        prompt = build_enhancement_prompt(batch_records, valid_majors)
+
+        # Process with Gemini
+        response = model.generate_content([
+            prompt,
+            {"mime_type": "image/jpeg", "data": image_data}
+        ])
+
+        # Parse JSON response
+        response_text = response.text.strip()
+
+        # Remove markdown code blocks if present
+        if response_text.startswith('```json'):
+            response_text = response_text.split('```json')[1]
+        if response_text.startswith('```'):
+            response_text = response_text.split('```')[1]
+        if response_text.endswith('```'):
+            response_text = response_text.rsplit('```', 1)[0]
+
+        response_text = response_text.strip()
+        enhanced_records = json.loads(response_text)
+
+        if not isinstance(enhanced_records, list):
+            raise ValueError("Expected JSON array from Gemini")
+
+        # Apply confidence calculation and review determination to each field
+        for record in enhanced_records:
+            for field_name, field_value in record.items():
+                # Skip row_number (it's not an enhanced field object)
+                if field_name == 'row_number':
+                    continue
+
+                # Only process enhanced field objects (dicts with quality indicators)
+                if isinstance(field_value, dict) and 'text_clarity' in field_value:
+                    # Calculate confidence from quality indicators
+                    confidence = calculate_confidence_from_quality(field_value)
+                    field_value['confidence'] = confidence
+
+                    # Determine if review is needed
+                    field_data = {
+                        'required': False,  # Sign-up sheets don't have required fields by default
+                        'value': field_value.get('value', '')
+                    }
+
+                    needs_review, review_notes = determine_review_from_quality(field_value, field_data)
+                    field_value['requires_human_review'] = needs_review
+
+                    # Add review notes if generated
+                    if review_notes and not field_value.get('notes'):
+                        field_value['review_notes'] = review_notes
+
+        return enhanced_records
+
+    except Exception as e:
+        log_debug(f"Batch enhancement failed: {str(e)}", service="signup")
+        raise
+
+
+async def get_field_requirements(school_id: str) -> Dict[str, Any]:
+    """
+    Fetch field requirements for a school.
+
+    Args:
+        school_id: School ID
+
+    Returns:
+        Dictionary of field requirements
+    """
+    try:
+        supabase_client = get_supabase_client()
+
+        # Query settings table for this school's field requirements
+        settings_query = supabase_client.table("settings").select("field_requirements").eq("school_id", school_id).maybe_single().execute()
+
+        if settings_query.data and settings_query.data.get("field_requirements"):
+            return settings_query.data.get("field_requirements", {})
+
+        # Default empty requirements if not configured
+        return {}
+
+    except Exception as e:
+        log_debug(f"Failed to fetch field requirements: {str(e)}", service="signup")
+        # Return empty dict on error - pipeline will use defaults
+        return {}
+
+
+async def create_reviewed_data_from_pipeline_result(
+    result: 'ProcessingResult',
+    event_id: str,
+    school_id: str,
     user_id: str,
     image_path: str,
     row_number: int
 ) -> str:
-    """Create a reviewed_data record from sign-up sheet data"""
+    """
+    Create reviewed_data record from pipeline ProcessingResult.
+    Converts FieldData objects to reviewed_data format.
+
+    Args:
+        result: ProcessingResult from pipeline
+        event_id: Event ID
+        school_id: School ID
+        user_id: User ID
+        image_path: Original image path
+        row_number: Row number from sheet
+
+    Returns:
+        Document ID of created record
+    """
+    from app.pipeline.models import ProcessingResult
+
+    document_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Convert FieldData objects to reviewed_data format
+    fields = {}
+    for field_name, field_data in result.fields.items():
+        fields[field_name] = {
+            "value": field_data.value,
+            "source": field_data.source,
+            "confidence": field_data.confidence,
+            "enabled": field_data.enabled,
+            "required": field_data.required,
+            "requires_human_review": field_data.requires_human_review,
+            "review_notes": field_data.review_notes,
+            "reviewed": False,
+            "original_value": field_data.original_value or field_data.value,
+            "edit_made": field_data.metadata.get('edit_made', False),
+            "edit_type": field_data.metadata.get('edit_type', 'none'),
+            "validation_status": field_data.validation_status,
+            "suggestions": field_data.suggestions or [],
+            "text_clarity": field_data.metadata.get('text_clarity', 'clear'),
+            "certainty": field_data.metadata.get('certainty', 'certain'),
+            "notes": field_data.metadata.get('notes', '')
+        }
+
+    # Get review status from pipeline result
+    review_status = result.metadata.get("review_status", "needs_review")
+
+    review_data = {
+        "document_id": document_id,
+        "fields": fields,
+        "school_id": school_id,
+        "user_id": user_id,
+        "event_id": event_id,
+        "image_path": image_path,
+        "review_status": review_status,
+        "upload_type": "signup_sheet",
+        "created_at": now,
+        "updated_at": now
+    }
+
+    try:
+        supabase_client = get_supabase_client()
+        response = supabase_client.table("reviewed_data").insert(review_data).execute()
+
+        if not response.data:
+            raise Exception("Failed to insert reviewed_data record")
+
+        log_debug(f"Created reviewed_data record from pipeline", {
+            "document_id": document_id,
+            "review_status": review_status,
+            "fields_count": len(fields),
+            "row_number": row_number
+        }, service="signup")
+
+        return document_id
+
+    except Exception as e:
+        log_debug(f"Failed to create reviewed_data record: {str(e)}", {
+            "document_id": document_id,
+            "review_data": review_data
+        }, service="signup")
+        raise
+
+
+async def create_reviewed_data_record(
+    record: Dict,
+    event_id: str,
+    school_id: str,
+    user_id: str,
+    image_path: str,
+    row_number: int
+) -> str:
+    """
+    LEGACY: Create a reviewed_data record from sign-up sheet data.
+    This is kept for backwards compatibility with old single-pass approach.
+    New code should use create_reviewed_data_from_pipeline_result() instead.
+    """
     
     # Generate unique document_id for this record
     document_id = str(uuid.uuid4())
