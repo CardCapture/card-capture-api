@@ -143,17 +143,126 @@ class AddressValidationEnhancer(FieldEnhancer):
     def _mark_needs_house_number(self, fields: Dict[str, FieldData], result) -> Dict[str, FieldData]:
         """
         Mark address as needing house number.
+        But still populate city/state/zip if Google Maps found them.
+        Also clean up the address field by removing city/state if they're at the end.
         """
+        # Even though address is invalid, populate city/state/zip if Google found them
+        extracted_city = None
+        extracted_state = None
+
+        if result.suggestion:
+            suggestion = result.suggestion
+
+            # Populate city if found
+            if suggestion.get('city'):
+                extracted_city = suggestion['city']
+                if 'city' not in fields:
+                    fields['city'] = FieldData(
+                        value=extracted_city,
+                        confidence=0.8,
+                        source='google_maps_partial',
+                        validation_status='partial',
+                        requires_human_review=False
+                    )
+                elif not fields['city'].value:  # Only update if empty
+                    fields['city'].value = extracted_city
+                    fields['city'].source = 'google_maps_partial'
+                    fields['city'].validation_status = 'partial'
+
+            # Populate state if found
+            if suggestion.get('state'):
+                extracted_state = suggestion['state']
+                if 'state' not in fields:
+                    fields['state'] = FieldData(
+                        value=extracted_state,
+                        confidence=0.8,
+                        source='google_maps_partial',
+                        validation_status='partial',
+                        requires_human_review=False
+                    )
+                elif not fields['state'].value:  # Only update if empty
+                    fields['state'].value = extracted_state
+                    fields['state'].source = 'google_maps_partial'
+                    fields['state'].validation_status = 'partial'
+
+            # Populate zip if found
+            if suggestion.get('zip_code'):
+                if 'zip_code' not in fields:
+                    fields['zip_code'] = FieldData(
+                        value=suggestion['zip_code'],
+                        confidence=0.8,
+                        source='google_maps_partial',
+                        validation_status='partial',
+                        requires_human_review=False
+                    )
+                elif not fields['zip_code'].value:  # Only update if empty
+                    fields['zip_code'].value = suggestion['zip_code']
+                    fields['zip_code'].source = 'google_maps_partial'
+                    fields['zip_code'].validation_status = 'partial'
+
+        # Clean up address field by removing city/state if they appear at the end
+        if 'address' in fields and extracted_city and extracted_state:
+            original_address = fields['address'].value
+            cleaned_address = self._remove_city_state_from_address(
+                original_address,
+                extracted_city,
+                extracted_state
+            )
+
+            if cleaned_address != original_address:
+                log_debug(f"Cleaned address: '{original_address}' → '{cleaned_address}'", service="pipeline")
+                fields['address'].value = cleaned_address
+
+        # Mark address as needing review
         if 'address' in fields:
             fields['address'].validation_status = 'no_house_number'
             fields['address'].requires_human_review = True
             fields['address'].review_notes = "Address missing house number"
-            
+
             # Add error message if provided
             if result.error:
                 fields['address'].review_notes = result.error
-        
+
         return fields
+
+    def _remove_city_state_from_address(self, address: str, city: str, state: str) -> str:
+        """
+        Remove city and state from the end of an address string.
+
+        Examples:
+        - "PO Box 854 Lambert ms" → "PO Box 854"
+        - "POBox 854 Lambert MS" → "POBox 854"
+        - "123 Main St Austin TX" → "123 Main St"
+        """
+        import re
+
+        # Normalize for comparison
+        address_lower = address.lower().strip()
+        city_lower = city.lower().strip()
+        state_lower = state.lower().strip()
+
+        # Pattern 1: "city state" at end (with or without space/punctuation)
+        # Match variations like: "Lambert ms", "Lambert MS", "Lambert, MS"
+        pattern1 = re.compile(
+            rf'\s*[,\s]*{re.escape(city_lower)}\s*,?\s*{re.escape(state_lower)}\s*$',
+            re.IGNORECASE
+        )
+
+        if pattern1.search(address_lower):
+            cleaned = pattern1.sub('', address).strip()
+            return cleaned
+
+        # Pattern 2: Try state only at the end (if city wasn't found)
+        pattern2 = re.compile(
+            rf'\s+{re.escape(state_lower)}\s*$',
+            re.IGNORECASE
+        )
+
+        if pattern2.search(address_lower):
+            cleaned = pattern2.sub('', address).strip()
+            return cleaned
+
+        return address
     
     def _mark_not_verified(self, fields: Dict[str, FieldData], result) -> Dict[str, FieldData]:
         """

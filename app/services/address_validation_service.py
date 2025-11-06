@@ -182,34 +182,40 @@ def validate_address(
         log_debug("No address provided", service="address_validation")
         return AddressValidationResult("not_verified", original_query=original_query)
     
-    # Check for house number first
-    if not _has_house_number(address):
-        log_debug("Address missing house number", service="address_validation")
-        return AddressValidationResult(
-            "no_house_number", 
-            error="Please add a house number to validate the address",
-            original_query=original_query
-        )
-    
-    # Check if we have enough info to make a useful query
-    # We can validate with:
-    # 1. Address + ZIP (Google can find city/state)
-    # 2. Address + City + State (Google can find ZIP)  
-    # 3. All fields
-    has_zip = zip_code and zip_code.strip()
-    has_city_state = city and city.strip() and state and state.strip()
-    
-    if not has_zip and not has_city_state:
-        log_debug("Not enough location context - need either ZIP or City+State", service="address_validation")
-        return AddressValidationResult(
-            "not_verified",
-            error="Need either ZIP code or City + State for validation",
-            original_query=original_query
-        )
-    
     # Try Google Maps validation
+    # Google Maps is smart enough to parse addresses like "144 Howard St Marks MS"
+    # even when city/state/zip aren't separated into individual fields.
+    # We'll let Google Maps attempt to geocode and then check if we got all components back.
+    #
+    # IMPORTANT: We call Google Maps EVEN if there's no house number, because it might
+    # still be able to extract city/state/zip from strings like "POBox 854 Lambert MS"
     try:
         google_result = _validate_with_google_maps(address, city, state, zip_code, original_query)
+
+        # Check for house number AFTER Google Maps, so we can still extract partial data
+        if not _has_house_number(address):
+            log_debug("Address missing house number - will try to extract city/state", service="address_validation")
+
+            # If Google Maps found anything, return it as a suggestion
+            if google_result:
+                suggestion = _format_suggestion(google_result)
+                log_debug("No house number but found city/state from Google Maps", {
+                    "city": suggestion.get('city'),
+                    "state": suggestion.get('state'),
+                    "zip": suggestion.get('zip_code')
+                }, service="address_validation")
+                return AddressValidationResult(
+                    "no_house_number",
+                    error="Please add a house number to validate the address",
+                    suggestion=suggestion,
+                    original_query=original_query
+                )
+            else:
+                return AddressValidationResult(
+                    "no_house_number",
+                    error="Please add a house number to validate the address",
+                    original_query=original_query
+                )
         
         if google_result:
             # Check if it's a complete address with house number
@@ -228,15 +234,40 @@ def validate_address(
             
             # For complete addresses (with house number), use updated thresholds with disambiguation
             if is_complete_address:
-                # High confidence (80+) = treat as verified
+                # High confidence (80+) = treat as verified, BUT only if we have ALL components
                 if confidence_score >= 80:
-                    log_debug(f"Complete address with high confidence (score: {confidence_score}) - VERIFIED", service="address_validation")
-                    return AddressValidationResult(
-                        "verified",
-                        is_valid=True,
-                        suggestion=_format_suggestion(google_result),
-                        original_query=original_query
+                    suggestion = _format_suggestion(google_result)
+
+                    # Check that Google Maps returned ALL required components
+                    has_all_components = (
+                        suggestion.get('address') and suggestion.get('address').strip() and
+                        suggestion.get('city') and suggestion.get('city').strip() and
+                        suggestion.get('state') and suggestion.get('state').strip() and
+                        suggestion.get('zip_code') and suggestion.get('zip_code').strip()
                     )
+
+                    if has_all_components:
+                        log_debug(f"Complete address with high confidence (score: {confidence_score}) and ALL components - VERIFIED", service="address_validation")
+                        return AddressValidationResult(
+                            "verified",
+                            is_valid=True,
+                            suggestion=suggestion,
+                            original_query=original_query
+                        )
+                    else:
+                        # Missing one or more components - needs review
+                        log_debug(f"High confidence but missing components - CAN BE VERIFIED", {
+                            "has_address": bool(suggestion.get('address')),
+                            "has_city": bool(suggestion.get('city')),
+                            "has_state": bool(suggestion.get('state')),
+                            "has_zip": bool(suggestion.get('zip_code'))
+                        }, service="address_validation")
+                        return AddressValidationResult(
+                            "can_be_verified",
+                            is_valid=True,
+                            suggestion=suggestion,
+                            original_query=original_query
+                        )
 
                 # Medium-high confidence (60-79) = can be verified
                 elif confidence_score >= 60:
