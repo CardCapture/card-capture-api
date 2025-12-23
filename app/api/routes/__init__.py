@@ -17,6 +17,7 @@ from .qr import router as qr_router
 from .high_schools import router as high_schools_router
 from .majors import router as majors_router
 from .notifications import router as notifications_router
+from .public import router as public_router
 
 __all__ = [
     'cards_router',
@@ -36,4 +37,5 @@ __all__ = [
     'high_schools_router',
     'majors_router',
     'notifications_router',
+    'public_router',
 ] 
