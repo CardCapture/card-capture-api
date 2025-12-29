@@ -18,6 +18,7 @@ from .high_schools import router as high_schools_router
 from .majors import router as majors_router
 from .notifications import router as notifications_router
 from .public import router as public_router
+from .account_linking import router as account_linking_router
 
 __all__ = [
     'cards_router',
@@ -38,4 +39,5 @@ __all__ = [
     'majors_router',
     'notifications_router',
     'public_router',
+    'account_linking_router',
 ] 

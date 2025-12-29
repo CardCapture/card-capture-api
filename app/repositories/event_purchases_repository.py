@@ -44,15 +44,28 @@ class EventPurchasesRepository:
         self,
         session_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Get a purchase by Stripe checkout session ID."""
+        """Get first purchase by Stripe checkout session ID (for backward compatibility)."""
         response = (
             self.client.table(self.table)
             .select("*")
             .eq("stripe_checkout_session_id", session_id)
-            .single()
+            .limit(1)
             .execute()
         )
-        return response.data
+        return response.data[0] if response.data else None
+
+    def get_purchases_by_session_id(
+        self,
+        session_id: str
+    ) -> List[Dict[str, Any]]:
+        """Get all purchases by Stripe checkout session ID."""
+        response = (
+            self.client.table(self.table)
+            .select("*")
+            .eq("stripe_checkout_session_id", session_id)
+            .execute()
+        )
+        return response.data or []
 
     def get_purchase_by_id(self, purchase_id: str) -> Optional[Dict[str, Any]]:
         """Get a purchase by ID."""
@@ -152,3 +165,20 @@ class EventPurchasesRepository:
             .execute()
         )
         return response.data
+
+    def get_purchase_by_user_and_event(
+        self,
+        user_id: str,
+        universal_event_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get any purchase (pending or completed) for a user and event."""
+        response = (
+            self.client.table(self.table)
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("universal_event_id", universal_event_id)
+            .neq("status", "failed")  # Ignore failed purchases
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None

@@ -3,7 +3,8 @@ Service for recruiter self-service signup flow.
 """
 
 import os
-from typing import Dict, Any, Optional
+import json
+from typing import Dict, Any, Optional, List
 from fastapi import HTTPException
 
 from app.core.clients import get_supabase_client
@@ -36,13 +37,13 @@ class RecruiterSignupService:
     ) -> RecruiterSignupResponse:
         """
         Process recruiter signup:
-        1. Validate event exists
+        1. Validate all events exist
         2. Check email isn't already registered
         3. Handle school selection (existing or create new)
         4. Create Supabase Auth user
         5. Create profile with recruiter role
-        6. Create Stripe checkout session
-        7. Create event purchase record
+        6. Create Stripe checkout session (with multiple line items)
+        7. Create event purchase records for each event
         """
         try:
             import stripe
@@ -60,13 +61,16 @@ class RecruiterSignupService:
             )
         stripe.api_key = stripe_secret_key
 
-        # 1. Validate universal event exists
-        event = self.events_repo.get_event_by_id(request.universal_event_id)
-        if not event:
-            raise HTTPException(
-                status_code=404,
-                detail="Event not found"
-            )
+        # 1. Validate all universal events exist
+        events: List[Dict[str, Any]] = []
+        for event_id in request.universal_event_ids:
+            event = self.events_repo.get_event_by_id(event_id)
+            if not event:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Event not found: {event_id}"
+                )
+            events.append(event)
 
         # 2. Check if email is already registered
         existing_user = self._check_email_exists(request.email)
@@ -101,11 +105,12 @@ class RecruiterSignupService:
             is_standalone=is_standalone
         )
 
-        # 6. Create Stripe checkout session
+        # 6. Create Stripe checkout session with line item per event
         frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
-        checkout_session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            line_items=[{
+
+        line_items = []
+        for event in events:
+            line_items.append({
                 "price_data": {
                     "currency": "usd",
                     "product_data": {
@@ -115,26 +120,35 @@ class RecruiterSignupService:
                     "unit_amount": EVENT_PRICE_CENTS,
                 },
                 "quantity": 1,
-            }],
+            })
+
+        # Calculate total amount
+        total_amount = EVENT_PRICE_CENTS * len(events)
+
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=line_items,
             mode="payment",
             success_url=f"{frontend_url}/signup/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{frontend_url}/signup/select-event?cancelled=true",
             customer_email=request.email,
             metadata={
                 "user_id": user_id,
-                "universal_event_id": request.universal_event_id,
+                "universal_event_ids": json.dumps(request.universal_event_ids),
                 "school_id": school_id,
-                "signup_type": "recruiter_self_service"
+                "signup_type": "recruiter_self_service",
+                "event_count": str(len(events))
             }
         )
 
-        # 7. Create event purchase record (before sign-in to keep service role)
-        self.purchases_repo.create_purchase(
-            user_id=user_id,
-            universal_event_id=request.universal_event_id,
-            stripe_checkout_session_id=checkout_session.id,
-            amount=EVENT_PRICE_CENTS
-        )
+        # 7. Create event purchase records for each event (before sign-in to keep service role)
+        for event_id in request.universal_event_ids:
+            self.purchases_repo.create_purchase(
+                user_id=user_id,
+                universal_event_id=event_id,
+                stripe_checkout_session_id=checkout_session.id,
+                amount=EVENT_PRICE_CENTS
+            )
 
         # 8. Sign in the user to get session tokens (do this last!)
         session_tokens = self._sign_in_user(request.email, request.password)
@@ -199,8 +213,8 @@ class RecruiterSignupService:
                     detail="school_name required for new school creation"
                 )
 
-            # Create new virtual school with provided name
-            new_school = self.schools_repo.create_virtual_school(
+            # Create new real school (will appear in search results)
+            new_school = self.schools_repo.create_school(
                 name=selection.school_name
             )
 
@@ -265,14 +279,18 @@ class RecruiterSignupService:
         parent_school_id: Optional[str],
         is_standalone: bool
     ) -> Dict[str, Any]:
-        """Create or update user profile with recruiter role."""
+        """Create or update user profile with appropriate role."""
+        # If user created a new school (not standalone), they're the admin
+        # If they selected an existing school (standalone), they're a recruiter pending approval
+        user_role = ["recruiter"] if is_standalone else ["admin"]
+
         profile_data = {
             "id": user_id,
             "email": email.lower(),
             "first_name": first_name,
             "last_name": last_name,
             "school_id": school_id,
-            "role": ["recruiter"],
+            "role": user_role,
             "account_status": "standalone" if is_standalone else "linked",
             "parent_school_id": parent_school_id,
             "is_self_registered": True

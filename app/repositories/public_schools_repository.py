@@ -73,6 +73,8 @@ class PublicSchoolsRepository:
     def create_virtual_school(self, name: str) -> Dict[str, Any]:
         """
         Create a virtual school for a standalone recruiter.
+        Used when a user selects an existing school but needs a temporary
+        school until their account is merged.
         """
         response = (
             self.client.table(self.table)
@@ -86,4 +88,23 @@ class PublicSchoolsRepository:
         )
         if not response.data:
             raise Exception("Failed to create virtual school")
+        return response.data[0]
+
+    def create_school(self, name: str) -> Dict[str, Any]:
+        """
+        Create a real school that will appear in search results.
+        Used when a user creates a new school that doesn't exist yet.
+        """
+        response = (
+            self.client.table(self.table)
+            .insert({
+                "name": name,
+                "is_virtual_school": False,
+                "credits_balance": 0,
+                "is_legacy_unlimited": False
+            })
+            .execute()
+        )
+        if not response.data:
+            raise Exception("Failed to create school")
         return response.data[0]
