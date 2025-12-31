@@ -12,6 +12,10 @@ from app.models.recruiter_signup import (
     SchoolListResponse,
     UniversalEventSearchResponse
 )
+from app.models.universal_event_submission import (
+    UniversalEventSubmissionRequest,
+    UniversalEventSubmissionResponse
+)
 from app.services.recruiter_signup_service import (
     RecruiterSignupService,
     get_public_schools,
@@ -100,13 +104,12 @@ async def _send_post_purchase_emails(
 async def _handle_account_linking_inline(
     supabase,
     user_id: str,
-    universal_event_id: str,
-    purchase_id: str,
-    universal_event: dict
+    purchased_events: list,
+    first_purchase_id: str
 ):
     """
     Check if user wants to link to an existing school and create link request if so.
-    Sends notification emails to school admins.
+    Sends notification emails to school admins with all purchased events.
     This is the same logic as in webhooks.py but called inline from verify-payment.
     """
     from app.repositories.account_link_requests_repository import AccountLinkRequestsRepository
@@ -159,11 +162,13 @@ async def _handle_account_linking_inline(
             print(f"[account_linking] Link request already exists for user {user_id} to school {parent_school_id}")
             return
 
+        # Use first event for the link request record (the email will show all events)
+        first_event = purchased_events[0] if purchased_events else {}
         link_request = link_repo.create_request(
             requester_user_id=user_id,
             target_school_id=parent_school_id,
-            universal_event_id=universal_event_id,
-            event_purchase_id=purchase_id
+            universal_event_id=first_event.get("id"),
+            event_purchase_id=first_purchase_id
         )
 
         print(f"[account_linking] Created link request {link_request.get('id')}")
@@ -174,24 +179,16 @@ async def _handle_account_linking_inline(
         if not recruiter_name:
             recruiter_name = profile.get("email", "Unknown")
 
-        # Get purchase amount
-        purchase_response = (
-            supabase.table("event_purchases")
-            .select("amount")
-            .eq("id", purchase_id)
-            .single()
-            .execute()
-        )
-        amount_paid = purchase_response.data.get("amount", 2500) if purchase_response.data else 2500
+        # Calculate total amount ($25 per event)
+        total_amount = len(purchased_events) * 2500
 
         email_result = notification_service.send_link_request_to_admins(
             school_id=parent_school_id,
             school_name=school.get("name", "Unknown School"),
             recruiter_name=recruiter_name,
             recruiter_email=profile.get("email", ""),
-            event_name=universal_event.get("name", "Unknown Event"),
-            event_date=universal_event.get("event_date", "TBD"),
-            amount_paid=amount_paid,
+            events=purchased_events,
+            total_amount=total_amount,
             request_id=link_request.get("id")
         )
 
@@ -288,6 +285,65 @@ async def get_event(event_id: str) -> Dict[str, Any]:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get event: {str(e)}"
+        )
+
+
+@router.post("/universal-events", response_model=UniversalEventSubmissionResponse)
+async def submit_universal_event(request: UniversalEventSubmissionRequest) -> Dict[str, Any]:
+    """
+    Submit a new universal event.
+
+    This is a public endpoint - no authentication required.
+    Events are created immediately with 'active' status.
+    Sends confirmation email to the organizer.
+    """
+    from app.repositories.universal_events_repository import UniversalEventsRepository
+    from app.services.notification_service import NotificationService
+
+    try:
+        repo = UniversalEventsRepository()
+
+        # Prepare event data
+        event_data = {
+            "name": request.name,
+            "event_date": request.event_date.isoformat(),
+            "contact_name": request.contact_name,
+            "contact_email": request.contact_email,
+            "contact_phone": request.contact_phone,
+            "start_time": request.start_time.isoformat() if request.start_time else None,
+            "end_time": request.end_time.isoformat() if request.end_time else None,
+            "location": request.location,
+            "address": request.address,
+            "city": request.city,
+            "state": request.state or "TX",
+            "zip": request.zip,
+            "description": request.description,
+            "status": "active"
+        }
+
+        # Create event
+        created_event = repo.create_event(event_data)
+
+        # Send confirmation email
+        notification_service = NotificationService()
+        notification_service.send_event_submission_confirmation(
+            recipient_email=request.contact_email,
+            recipient_name=request.contact_name,
+            event_name=request.name,
+            event_date=request.event_date.isoformat(),
+            event_id=created_event.get("id")
+        )
+
+        return {
+            "success": True,
+            "event_id": created_event.get("id"),
+            "message": "Event submitted successfully! A confirmation email has been sent."
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to submit event: {str(e)}"
         )
 
 
@@ -482,14 +538,13 @@ async def verify_payment(session_id: str) -> Dict[str, Any]:
 
                 supabase.table("event_purchases").update(update_data).eq("id", purchase.get("id")).execute()
 
-        # Handle account linking for the first event (same logic as webhook)
-        if first_universal_event and first_purchase_id:
+        # Handle account linking with all purchased events (same logic as webhook)
+        if purchased_events and first_purchase_id:
             await _handle_account_linking_inline(
                 supabase=supabase,
                 user_id=user_id,
-                universal_event_id=first_universal_event.get("id"),
-                purchase_id=first_purchase_id,
-                universal_event=first_universal_event
+                purchased_events=purchased_events,
+                first_purchase_id=first_purchase_id
             )
 
         if created_event_ids:

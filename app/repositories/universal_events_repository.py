@@ -108,3 +108,29 @@ class UniversalEventsRepository:
             .execute()
         )
         return response.data or []
+
+    def create_event(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new universal event.
+
+        Required fields: name, event_date
+        Optional fields: start_time, end_time, location, address, city, state, zip,
+                        description, contact_name, contact_email, contact_phone, etc.
+        Defaults: state='TX', status='active'
+        """
+        # Set defaults
+        event_data.setdefault("state", "TX")
+        event_data.setdefault("status", "active")
+
+        # Remove None values to let DB defaults apply
+        event_data = {k: v for k, v in event_data.items() if v is not None}
+
+        response = (
+            self.client.table(self.table)
+            .insert(event_data)
+            .execute()
+        )
+
+        if response.data:
+            return response.data[0]
+        raise Exception("Failed to create event")

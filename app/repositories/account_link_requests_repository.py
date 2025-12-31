@@ -300,7 +300,7 @@ class AccountLinkRequestsRepository:
         if user_ids:
             profiles_response = (
                 self.client.table("profiles")
-                .select("id, email, first_name, last_name")
+                .select("id, email, first_name, last_name, school_id")
                 .in_("id", list(user_ids))
                 .execute()
             )
@@ -343,6 +343,42 @@ class AccountLinkRequestsRepository:
             for s in (schools_response.data or []):
                 schools_map[s["id"]] = s
 
+        # Fetch ALL event purchases for each requester (to show all events they purchased)
+        # This gives us a complete picture of what they bought, not just the event in the link request
+        all_purchases_by_user = {}
+        if user_ids:
+            # Get all completed purchases for these users
+            all_purchases_response = (
+                self.client.table("event_purchases")
+                .select("id, user_id, universal_event_id, amount, status, completed_at")
+                .in_("user_id", list(user_ids))
+                .eq("status", "completed")
+                .execute()
+            )
+            for purchase in (all_purchases_response.data or []):
+                user_id = purchase.get("user_id")
+                if user_id not in all_purchases_by_user:
+                    all_purchases_by_user[user_id] = []
+                all_purchases_by_user[user_id].append(purchase)
+
+            # Collect all unique event IDs from these purchases
+            all_event_ids = set()
+            for purchases in all_purchases_by_user.values():
+                for p in purchases:
+                    if p.get("universal_event_id"):
+                        all_event_ids.add(p["universal_event_id"])
+
+            # Fetch all events for these purchases
+            if all_event_ids:
+                all_events_response = (
+                    self.client.table("universal_events")
+                    .select("id, name, event_date, location, city")
+                    .in_("id", list(all_event_ids))
+                    .execute()
+                )
+                for e in (all_events_response.data or []):
+                    events_map[e["id"]] = e
+
         # Enrich requests
         enriched = []
         for req in requests:
@@ -356,17 +392,41 @@ class AccountLinkRequestsRepository:
             if req.get("reviewed_by"):
                 enriched_req["reviewer"] = profiles_map.get(req["reviewed_by"])
 
-            # Add event
+            # Add event (single event from link request - for backwards compatibility)
             if req.get("universal_event_id"):
                 enriched_req["universal_event"] = events_map.get(req["universal_event_id"])
 
-            # Add purchase
+            # Add purchase (single purchase from link request - for backwards compatibility)
             if req.get("event_purchase_id"):
                 enriched_req["event_purchase"] = purchases_map.get(req["event_purchase_id"])
 
             # Add target school
             if req.get("target_school_id"):
                 enriched_req["target_school"] = schools_map.get(req["target_school_id"])
+
+            # Add ALL purchased events for this requester
+            requester_id = req.get("requester_user_id")
+            if requester_id and requester_id in all_purchases_by_user:
+                user_purchases = all_purchases_by_user[requester_id]
+                purchased_events = []
+                total_amount = 0
+                for purchase in user_purchases:
+                    event_id = purchase.get("universal_event_id")
+                    event_data = events_map.get(event_id)
+                    if event_data:
+                        purchased_events.append({
+                            "event": event_data,
+                            "purchase": {
+                                "id": purchase.get("id"),
+                                "amount": purchase.get("amount"),
+                                "status": purchase.get("status"),
+                                "completed_at": purchase.get("completed_at")
+                            }
+                        })
+                        total_amount += purchase.get("amount", 0)
+
+                enriched_req["purchased_events"] = purchased_events
+                enriched_req["total_amount"] = total_amount
 
             enriched.append(enriched_req)
 

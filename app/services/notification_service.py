@@ -356,12 +356,17 @@ class NotificationService:
                 self.supabase.table("profiles")
                 .select("id, email, first_name, last_name")
                 .eq("school_id", school_id)
-                .contains("role", ["admin"])
+                .filter("role", "cs", "{admin}")  # Use 'cs' (contains) operator for PostgreSQL arrays
                 .execute()
             )
-            return response.data or []
+            admins = response.data or []
+            if not admins:
+                log_debug(f"No admins found for school_id={school_id}. Query returned empty results.", service="notifications")
+            else:
+                log_debug(f"Found {len(admins)} admin(s) for school_id={school_id}", service="notifications")
+            return admins
         except Exception as e:
-            log_debug(f"Error fetching school admins: {str(e)}", service="notifications")
+            log_debug(f"Error fetching school admins for school_id={school_id}: {str(e)}", service="notifications")
             return []
 
     def send_link_request_to_admins(
@@ -370,13 +375,17 @@ class NotificationService:
         school_name: str,
         recruiter_name: str,
         recruiter_email: str,
-        event_name: str,
-        event_date: str,
-        amount_paid: int,
+        events: List[Dict[str, Any]],
+        total_amount: int,
         request_id: str
     ) -> Dict[str, Any]:
         """
         Send notification email to all school admins about a new link request.
+
+        Args:
+            events: List of dicts with 'name' and 'event_date' keys for each purchased event
+            total_amount: Total amount paid in cents
+
         Returns summary of emails sent.
         """
         if not self.resend_api_key:
@@ -392,7 +401,14 @@ class NotificationService:
         approval_url = f"{self.frontend_url}/settings/user-management?merge_request={request_id}"
 
         # Format amount
-        amount_display = f"${amount_paid / 100:.2f}"
+        amount_display = f"${total_amount / 100:.2f}"
+
+        # Build subject line with event count
+        event_count = len(events)
+        if event_count == 1:
+            subject = f"New Recruiter Signup: {recruiter_name} for {events[0].get('name', 'Unknown Event')}"
+        else:
+            subject = f"New Recruiter Signup: {recruiter_name} for {event_count} events"
 
         sent_count = 0
         errors = []
@@ -410,8 +426,7 @@ class NotificationService:
                     school_name=school_name,
                     recruiter_name=recruiter_name,
                     recruiter_email=recruiter_email,
-                    event_name=event_name,
-                    event_date=event_date,
+                    events=events,
                     amount_paid=amount_display,
                     approval_url=approval_url
                 )
@@ -419,7 +434,7 @@ class NotificationService:
                 params = {
                     "from": "CardCapture <no-reply@cardcapture.io>",
                     "to": [admin_email],
-                    "subject": f"New Recruiter Signup: {recruiter_name} for {event_name}",
+                    "subject": subject,
                     "html": html_content
                 }
 
@@ -519,14 +534,29 @@ class NotificationService:
         school_name: str,
         recruiter_name: str,
         recruiter_email: str,
-        event_name: str,
-        event_date: str,
+        events: List[Dict[str, Any]],
         amount_paid: str,
         approval_url: str
     ) -> str:
         """Build HTML email for admin link request notification."""
         logo_url = "https://assets.cardcapture.io/storage/v1/object/public/assets/cc-logo-transparent-min.png"
         current_year = datetime.now().year
+
+        # Build events rows dynamically
+        event_count = len(events)
+        events_label = "Event:" if event_count == 1 else "Events:"
+
+        events_html = ""
+        for i, event in enumerate(events):
+            event_name = event.get("name", "Unknown Event")
+            event_date = event.get("event_date", "TBD")
+            # Add separator between events (except for last one)
+            border_style = "border-bottom: 1px solid #e5e7eb;" if i < event_count - 1 else ""
+            events_html += f"""
+                        <tr>
+                            <td style="color: #1f2937; font-weight: 600; padding: 8px 0; {border_style}">{event_name}</td>
+                            <td style="color: #6b7280; padding: 8px 0; text-align: right; {border_style}">{event_date}</td>
+                        </tr>"""
 
         return f"""
         <!DOCTYPE html>
@@ -557,21 +587,25 @@ class NotificationService:
                         </tr>
                         <tr>
                             <td style="color: #6b7280; padding: 8px 0;">Email:</td>
-                            <td style="color: #1f2937; padding: 8px 0;">{recruiter_email}</td>
-                        </tr>
-                        <tr>
-                            <td style="color: #6b7280; padding: 8px 0;">Event:</td>
-                            <td style="color: #1f2937; font-weight: 600; padding: 8px 0;">{event_name}</td>
-                        </tr>
-                        <tr>
-                            <td style="color: #6b7280; padding: 8px 0;">Date:</td>
-                            <td style="color: #1f2937; padding: 8px 0;">{event_date}</td>
-                        </tr>
-                        <tr>
-                            <td style="color: #6b7280; padding: 8px 0;">Amount Paid:</td>
-                            <td style="color: #059669; font-weight: 600; padding: 8px 0;">{amount_paid}</td>
+                            <td style="color: #1f2937; padding: 8px 0;"><a href="mailto:{recruiter_email}" style="color: #2563eb;">{recruiter_email}</a></td>
                         </tr>
                     </table>
+
+                    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
+                        <p style="color: #6b7280; margin: 0 0 8px 0; font-size: 14px;">{events_label}</p>
+                        <table style="width: 100%; border-collapse: collapse;">
+                            {events_html}
+                        </table>
+                    </div>
+
+                    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <tr>
+                                <td style="color: #6b7280; padding: 8px 0;">Total Paid:</td>
+                                <td style="color: #059669; font-weight: 600; padding: 8px 0; text-align: right;">{amount_paid}</td>
+                            </tr>
+                        </table>
+                    </div>
                 </div>
 
                 <p style="color: #4b5563; line-height: 1.6;">
@@ -586,7 +620,7 @@ class NotificationService:
                 </div>
 
                 <p style="color: #6b7280; font-size: 14px; line-height: 1.6;">
-                    If you don't recognize this person, no action is needed. They can continue using CardCapture independently, and their scanned cards from this event will still be accessible.
+                    If you don't recognize this person, no action is needed. They can continue using CardCapture independently, and their scanned cards from {"this event" if event_count == 1 else "these events"} will still be accessible.
                 </p>
 
                 <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
@@ -1026,6 +1060,116 @@ class NotificationService:
 
                 <p style="color: #9ca3af; font-size: 12px; text-align: center;">
                     Questions? Reply to this email or contact support@cardcapture.io<br>
+                    &copy; {current_year} CardCapture. All rights reserved.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+
+    # =====================================================
+    # Event Submission Notifications
+    # =====================================================
+
+    def send_event_submission_confirmation(
+        self,
+        recipient_email: str,
+        recipient_name: str,
+        event_name: str,
+        event_date: str,
+        event_id: str
+    ) -> bool:
+        """Send confirmation email to event organizer after successful submission."""
+        if not self.resend_api_key:
+            log_debug("Resend API key not configured, skipping confirmation email", service="notifications")
+            return False
+
+        try:
+            html_content = self._build_event_submission_email(
+                recipient_name=recipient_name,
+                event_name=event_name,
+                event_date=event_date,
+                event_id=event_id
+            )
+
+            params = {
+                "from": "CardCapture <no-reply@cardcapture.io>",
+                "to": [recipient_email],
+                "subject": f"Event Submitted: {event_name}",
+                "html": html_content
+            }
+
+            response = resend.Emails.send(params)
+            log_debug(
+                f"Event submission confirmation sent to {recipient_email}. Response ID: {response.get('id', 'unknown')}",
+                service="notifications"
+            )
+            return True
+
+        except Exception as e:
+            log_debug(f"Failed to send event submission confirmation: {str(e)}", service="notifications")
+            return False
+
+    def _build_event_submission_email(
+        self,
+        recipient_name: str,
+        event_name: str,
+        event_date: str,
+        event_id: str
+    ) -> str:
+        """Build HTML email for event submission confirmation."""
+        logo_url = "https://assets.cardcapture.io/storage/v1/object/public/assets/cc-logo-transparent-min.png"
+        current_year = datetime.now().year
+
+        # Format date for display
+        try:
+            parsed_date = datetime.fromisoformat(event_date)
+            formatted_date = parsed_date.strftime("%B %d, %Y")
+        except:
+            formatted_date = event_date
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+            <div style="background-color: white; border-radius: 8px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <div style="text-align: center; margin-bottom: 8px;">
+                    <img src="{logo_url}" alt="CardCapture" style="max-width: 180px; height: auto;">
+                </div>
+
+                <h2 style="color: #1f2937; margin-bottom: 16px; text-align: center;">Event Submitted!</h2>
+
+                <p style="color: #4b5563; line-height: 1.6;">Hi {recipient_name},</p>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    Thank you for submitting your event to CardCapture. Your event has been successfully added to our catalog.
+                </p>
+
+                <div style="background-color: #f3f4f6; border-radius: 8px; padding: 20px; margin: 24px 0;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="color: #6b7280; padding: 8px 0;">Event Name:</td>
+                            <td style="color: #1f2937; font-weight: 600; padding: 8px 0;">{event_name}</td>
+                        </tr>
+                        <tr>
+                            <td style="color: #6b7280; padding: 8px 0;">Event Date:</td>
+                            <td style="color: #1f2937; font-weight: 600; padding: 8px 0;">{formatted_date}</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    Your event is now visible to recruiters who can sign up to attend. You'll be listed as the point of contact for any questions.
+                </p>
+
+                <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
+
+                <p style="color: #9ca3af; font-size: 12px; text-align: center;">
+                    Questions? Contact support@cardcapture.io<br>
                     &copy; {current_year} CardCapture. All rights reserved.
                 </p>
             </div>

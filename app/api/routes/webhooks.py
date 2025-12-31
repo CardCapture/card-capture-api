@@ -261,14 +261,13 @@ async def handle_checkout_completed(session: dict):
             supabase.table("event_purchases").update(update_data).eq("id", purchase.get("id")).execute()
             log_debug(f"Purchase completed successfully: {purchase.get('id')} -> event {event_id}", service="webhook")
 
-        # Handle account linking for first event only
-        if first_universal_event and first_purchase_id:
+        # Handle account linking with all purchased events
+        if purchased_events and first_purchase_id:
             await handle_account_linking(
                 supabase=supabase,
                 user_id=user_id,
-                universal_event_id=first_universal_event.get("id"),
-                purchase_id=first_purchase_id,
-                universal_event=first_universal_event
+                purchased_events=purchased_events,
+                first_purchase_id=first_purchase_id
             )
 
         # Send post-purchase emails (receipt + invite admins if applicable)
@@ -292,13 +291,12 @@ async def handle_checkout_completed(session: dict):
 async def handle_account_linking(
     supabase,
     user_id: str,
-    universal_event_id: str,
-    purchase_id: str,
-    universal_event: dict
+    purchased_events: list,
+    first_purchase_id: str
 ):
     """
     Check if user wants to link to an existing school and create link request if so.
-    Sends notification emails to school admins.
+    Sends notification emails to school admins with all purchased events.
     """
     try:
         # Get user profile to check for parent_school_id
@@ -347,11 +345,13 @@ async def handle_account_linking(
             log_debug(f"Link request already exists for user {user_id} to school {parent_school_id}", service="webhook")
             return
 
+        # Use first event for the link request record (the email will show all events)
+        first_event = purchased_events[0] if purchased_events else {}
         link_request = link_repo.create_request(
             requester_user_id=user_id,
             target_school_id=parent_school_id,
-            universal_event_id=universal_event_id,
-            event_purchase_id=purchase_id
+            universal_event_id=first_event.get("id"),
+            event_purchase_id=first_purchase_id
         )
 
         log_debug(f"Created link request {link_request.get('id')}", service="webhook")
@@ -362,24 +362,16 @@ async def handle_account_linking(
         if not recruiter_name:
             recruiter_name = profile.get("email", "Unknown")
 
-        # Get purchase amount
-        purchase_response = (
-            supabase.table("event_purchases")
-            .select("amount")
-            .eq("id", purchase_id)
-            .single()
-            .execute()
-        )
-        amount_paid = purchase_response.data.get("amount", 2500) if purchase_response.data else 2500
+        # Calculate total amount ($25 per event)
+        total_amount = len(purchased_events) * 2500
 
         email_result = notification_service.send_link_request_to_admins(
             school_id=parent_school_id,
             school_name=school.get("name", "Unknown School"),
             recruiter_name=recruiter_name,
             recruiter_email=profile.get("email", ""),
-            event_name=universal_event.get("name", "Unknown Event"),
-            event_date=universal_event.get("event_date", "TBD"),
-            amount_paid=amount_paid,
+            events=purchased_events,
+            total_amount=total_amount,
             request_id=link_request.get("id")
         )
 
