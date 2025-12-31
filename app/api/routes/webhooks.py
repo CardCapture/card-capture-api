@@ -4,6 +4,7 @@ Webhook handlers for external services (Stripe, etc.)
 
 import os
 import json
+import asyncio
 import stripe
 from fastapi import APIRouter, Request, HTTPException, Header
 from datetime import datetime, timezone
@@ -73,6 +74,8 @@ async def send_post_purchase_emails(
         # 2. Send invite admins email only for NEW users who created a new school (not standalone)
         # Skip for admin_event_purchase since they already have an account
         if is_new_user and account_status != "standalone" and school_id:
+            # Brief delay to respect Resend's 2 req/sec rate limit
+            await asyncio.sleep(0.5)
             # Get school name
             school_response = (
                 supabase.table("schools")
@@ -269,6 +272,9 @@ async def handle_checkout_completed(session: dict):
                 purchased_events=purchased_events,
                 first_purchase_id=first_purchase_id
             )
+            # Brief delay to respect Resend's 2 req/sec rate limit
+            # (account linking uses batch API, but this separates it from receipt emails)
+            await asyncio.sleep(0.5)
 
         # Send post-purchase emails (receipt + invite admins if applicable)
         if purchased_events:

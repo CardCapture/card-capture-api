@@ -381,6 +381,7 @@ class NotificationService:
     ) -> Dict[str, Any]:
         """
         Send notification email to all school admins about a new link request.
+        Uses Resend's batch API to send all emails in a single request (avoids rate limits).
 
         Args:
             events: List of dicts with 'name' and 'event_date' keys for each purchased event
@@ -410,8 +411,9 @@ class NotificationService:
         else:
             subject = f"New Recruiter Signup: {recruiter_name} for {event_count} events"
 
-        sent_count = 0
-        errors = []
+        # Build batch email list
+        batch_emails = []
+        admin_emails = []
 
         for admin in admins:
             admin_email = admin.get("email")
@@ -420,41 +422,50 @@ class NotificationService:
             if not admin_email:
                 continue
 
-            try:
-                html_content = self._build_link_request_email(
-                    admin_name=admin_name,
-                    school_name=school_name,
-                    recruiter_name=recruiter_name,
-                    recruiter_email=recruiter_email,
-                    events=events,
-                    amount_paid=amount_display,
-                    approval_url=approval_url
-                )
+            html_content = self._build_link_request_email(
+                admin_name=admin_name,
+                school_name=school_name,
+                recruiter_name=recruiter_name,
+                recruiter_email=recruiter_email,
+                events=events,
+                amount_paid=amount_display,
+                approval_url=approval_url
+            )
 
-                params = {
-                    "from": "CardCapture <no-reply@cardcapture.io>",
-                    "to": [admin_email],
-                    "subject": subject,
-                    "html": html_content
-                }
+            batch_emails.append({
+                "from": "CardCapture <no-reply@cardcapture.io>",
+                "to": [admin_email],
+                "subject": subject,
+                "html": html_content
+            })
+            admin_emails.append(admin_email)
 
-                response = resend.Emails.send(params)
-                log_debug(
-                    f"Link request notification sent to {admin_email}. Response ID: {response.get('id', 'unknown')}",
-                    service="notifications"
-                )
-                sent_count += 1
+        if not batch_emails:
+            log_debug(f"No valid admin emails found for school {school_id}", service="notifications")
+            return {"success": False, "reason": "no_valid_admin_emails"}
 
-            except Exception as e:
-                log_debug(f"Failed to send link request email to {admin_email}: {str(e)}", service="notifications")
-                errors.append({"email": admin_email, "error": str(e)})
+        try:
+            # Use batch API to send all emails in a single request
+            response = resend.Batch.send(batch_emails)
+            log_debug(
+                f"Batch link request notification sent to {len(batch_emails)} admins. Response: {response}",
+                service="notifications"
+            )
+            return {
+                "success": True,
+                "sent_count": len(batch_emails),
+                "total_admins": len(admins),
+                "errors": []
+            }
 
-        return {
-            "success": sent_count > 0,
-            "sent_count": sent_count,
-            "total_admins": len(admins),
-            "errors": errors
-        }
+        except Exception as e:
+            log_debug(f"Failed to send batch link request emails: {str(e)}", service="notifications")
+            return {
+                "success": False,
+                "sent_count": 0,
+                "total_admins": len(admins),
+                "errors": [{"emails": admin_emails, "error": str(e)}]
+            }
 
     def send_link_approval_email(
         self,
