@@ -155,6 +155,7 @@ async def purchase_events(request: AdminEventPurchaseRequest, user=Depends(get_c
         success_url=f"{frontend_url}/events?purchase=success&session_id={{CHECKOUT_SESSION_ID}}",
         cancel_url=f"{frontend_url}/purchase-events?cancelled=true",
         customer_email=user_email,
+        allow_promotion_codes=True,
         metadata={
             "user_id": user_id,
             "universal_event_ids": json.dumps(request.universal_event_ids),

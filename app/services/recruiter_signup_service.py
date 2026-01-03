@@ -132,6 +132,7 @@ class RecruiterSignupService:
             success_url=f"{frontend_url}/signup/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{frontend_url}/signup/select-event?cancelled=true",
             customer_email=request.email,
+            allow_promotion_codes=True,
             metadata={
                 "user_id": user_id,
                 "universal_event_ids": json.dumps(request.universal_event_ids),
