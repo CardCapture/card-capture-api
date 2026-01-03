@@ -9,6 +9,13 @@ from app.utils.retry_utils import log_debug
 class NotificationService:
     """Service for handling email notifications"""
 
+    @staticmethod
+    def _get_first_name(full_name: str) -> str:
+        """Extract first name from full name for friendlier greetings."""
+        if not full_name:
+            return "there"
+        return full_name.split()[0]
+
     def __init__(self):
         self.supabase = get_supabase_client()
         self.frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
@@ -680,7 +687,7 @@ class NotificationService:
 
                 <h2 style="color: #1f2937; margin-bottom: 16px; text-align: center;">Account Linked!</h2>
 
-                <p style="color: #4b5563; line-height: 1.6;">Hi {recruiter_name},</p>
+                <p style="color: #4b5563; line-height: 1.6;">Hi {self._get_first_name(recruiter_name)},</p>
 
                 <p style="color: #4b5563; line-height: 1.6;">
                     Great news! <strong>{school_name}</strong> has approved your account link request.
@@ -738,7 +745,7 @@ class NotificationService:
 
                 <h2 style="color: #1f2937; margin-bottom: 16px;">Account Link Update</h2>
 
-                <p style="color: #4b5563; line-height: 1.6;">Hi {recruiter_name},</p>
+                <p style="color: #4b5563; line-height: 1.6;">Hi {self._get_first_name(recruiter_name)},</p>
 
                 <p style="color: #4b5563; line-height: 1.6;">
                     <strong>{school_name}</strong> has reviewed your account link request and chosen not to link your account at this time.
@@ -931,7 +938,7 @@ class NotificationService:
             title_html = '<h2 style="color: #1f2937; margin-bottom: 8px; text-align: center;">Welcome to CardCapture!</h2>'
             subtitle_html = '<p style="color: #6b7280; text-align: center; margin-bottom: 24px;">Your purchase was successful</p>'
             intro_html = f"""
-                <p style="color: #4b5563; line-height: 1.6;">Hi {recipient_name.split()[0] if recipient_name else 'there'},</p>
+                <p style="color: #4b5563; line-height: 1.6;">Hi {self._get_first_name(recipient_name)},</p>
                 <p style="color: #4b5563; line-height: 1.6;">
                     Thank you for signing up for CardCapture! Your event has been created and you're ready to start scanning inquiry cards.
                 </p>
@@ -941,7 +948,7 @@ class NotificationService:
             subtitle_html = '<p style="color: #6b7280; text-align: center; margin-bottom: 24px;">Your purchase was successful</p>'
             event_word = "event has" if len(events) == 1 else "events have"
             intro_html = f"""
-                <p style="color: #4b5563; line-height: 1.6;">Hi {recipient_name.split()[0] if recipient_name else 'there'},</p>
+                <p style="color: #4b5563; line-height: 1.6;">Hi {self._get_first_name(recipient_name)},</p>
                 <p style="color: #4b5563; line-height: 1.6;">
                     Thank you for your purchase! Your {event_word} been added to your account and you're ready to start scanning inquiry cards.
                 </p>
@@ -1040,7 +1047,7 @@ class NotificationService:
 
                 <h2 style="color: #1f2937; margin-bottom: 16px; text-align: center;">Invite Your Team</h2>
 
-                <p style="color: #4b5563; line-height: 1.6;">Hi {recipient_name.split()[0] if recipient_name else 'there'},</p>
+                <p style="color: #4b5563; line-height: 1.6;">Hi {self._get_first_name(recipient_name)},</p>
 
                 <p style="color: #4b5563; line-height: 1.6;">
                     Congratulations on setting up <strong>{school_name}</strong> on CardCapture! As the account administrator, you can invite other team members to help manage your recruiting events.
@@ -1154,7 +1161,7 @@ class NotificationService:
 
                 <h2 style="color: #1f2937; margin-bottom: 16px; text-align: center;">Event Submitted!</h2>
 
-                <p style="color: #4b5563; line-height: 1.6;">Hi {recipient_name},</p>
+                <p style="color: #4b5563; line-height: 1.6;">Hi {self._get_first_name(recipient_name)},</p>
 
                 <p style="color: #4b5563; line-height: 1.6;">
                     Thank you for submitting your event to CardCapture. Your event has been successfully added to our catalog.
