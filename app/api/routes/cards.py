@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Depends
 from fastapi.responses import JSONResponse
+from app.core.auth import get_current_user
 from typing import Dict, Any, List, Union
 from datetime import datetime, timezone
 import traceback
@@ -29,11 +30,11 @@ router = APIRouter()
 REQUIRED_FIELDS = ["address", "cell", "city", "state", "zip_code", "name", "email"]
 
 @router.get("/cards", response_model=List[Dict[str, Any]])
-async def get_cards(event_id: Union[str, None] = None):
+async def get_cards(event_id: Union[str, None] = None, user=Depends(get_current_user)):
     return await get_cards_service(event_id)
 
 @router.post("/archive-cards")
-async def archive_cards(payload: BulkActionPayload):
+async def archive_cards(payload: BulkActionPayload, user=Depends(get_current_user)):
     """
     Archive cards - standardized endpoint
     """
@@ -45,7 +46,7 @@ async def archive_cards(payload: BulkActionPayload):
     return await archive_cards_service(payload.document_ids)
 
 @router.post("/mark-exported")
-async def mark_as_exported(payload: BulkActionPayload):
+async def mark_as_exported(payload: BulkActionPayload, user=Depends(get_current_user)):
     """
     Mark cards as exported - standardized endpoint
     """
@@ -56,26 +57,8 @@ async def mark_as_exported(payload: BulkActionPayload):
     
     return await mark_as_exported_service(payload.document_ids)
 
-@router.post("/debug-mark-exported")
-async def debug_mark_exported(payload: Dict[str, Any] = Body(...)):
-    """Debug endpoint to see what payload is being sent"""
-    print(f"🐛 DEBUG: Raw payload received: {payload}")
-    print(f"🐛 DEBUG: Payload type: {type(payload)}")
-    print(f"🐛 DEBUG: Payload keys: {list(payload.keys()) if isinstance(payload, dict) else 'Not a dict'}")
-    
-    document_ids = None
-    if isinstance(payload, dict):
-        document_ids = payload.get('document_ids') or payload.get('documentIds') or payload.get('ids')
-    
-    print(f"🐛 DEBUG: Extracted document_ids: {document_ids}")
-    
-    return JSONResponse(status_code=200, content={
-        "received_payload": payload,
-        "extracted_document_ids": document_ids
-    })
-
 @router.post("/delete-cards")
-async def delete_cards(payload: BulkActionPayload):
+async def delete_cards(payload: BulkActionPayload, user=Depends(get_current_user)):
     """
     Delete cards - standardized endpoint
     """
@@ -87,7 +70,7 @@ async def delete_cards(payload: BulkActionPayload):
     return delete_cards_service(payload.document_ids)
 
 @router.post("/move-cards")
-async def move_cards(payload: BulkActionPayload):
+async def move_cards(payload: BulkActionPayload, user=Depends(get_current_user)):
     """
     Move cards - standardized endpoint
     """
@@ -100,7 +83,7 @@ async def move_cards(payload: BulkActionPayload):
     return move_cards_service(payload.document_ids, status)
 
 @router.post("/save-review/{document_id}")
-async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(...)):
+async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
     """
     Save manual review changes for a card (supports both V1 and V2)
     """
@@ -201,7 +184,7 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
 
 
 @router.post("/address-suggestions", response_model=AddressSuggestionsResponse)
-async def get_address_suggestions_endpoint(payload: AddressSuggestionsRequest):
+async def get_address_suggestions_endpoint(payload: AddressSuggestionsRequest, user=Depends(get_current_user)):
     """
     Get real-time address suggestions for review modal
     
@@ -227,7 +210,7 @@ async def get_address_suggestions_endpoint(payload: AddressSuggestionsRequest):
         )
 
 @router.post("/address/validate")
-async def validate_address_endpoint(payload: Dict[str, Any] = Body(...)):
+async def validate_address_endpoint(payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
     """
     New consolidated address validation endpoint
     
@@ -272,7 +255,7 @@ async def validate_address_endpoint(payload: Dict[str, Any] = Body(...)):
         )
 
 @router.post("/mark-field-reviewed/{document_id}")
-async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(...)):
+async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
     """
     Mark specific fields as manually reviewed (supports both V1 and V2)
 
@@ -378,7 +361,7 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cards/manual")
-async def manual_entry(payload: Dict[str, Any] = Body(...)):
+async def manual_entry(payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
     """
     Create a new manual entry in reviewed_data with review_status='reviewed' and no image.
     Expects: { event_id, school_id, fields: { ... } }

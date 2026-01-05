@@ -29,21 +29,6 @@ async def upload_file(
 ):
     return await upload_file_controller(background_tasks, file, event_id, school_id, user)
 
-@router.post("/test-upload")
-async def test_upload(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    event_id: str = Form(None),
-    school_id: str = Form(...)
-):
-    # Create a test user object with the valid user ID
-    test_user = {
-        "id": "f8714b88-f5c7-404c-b4fa-2304e014a44b",
-        "email": "test@example.com",
-        "role": "admin"
-    }
-    return await upload_file_controller(background_tasks, file, event_id, school_id, test_user)
-
 @router.get("/upload-status/{document_id}")
 async def check_upload_status(document_id: str):
     return await check_upload_status_controller(document_id)

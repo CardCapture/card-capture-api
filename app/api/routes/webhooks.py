@@ -123,23 +123,25 @@ async def stripe_webhook(
     # Get raw body for signature verification
     payload = await request.body()
 
-    # Verify webhook signature if secret is configured
-    if webhook_secret and stripe_signature:
-        try:
-            event = stripe.Webhook.construct_event(
-                payload, stripe_signature, webhook_secret
-            )
-        except ValueError as e:
-            log_debug(f"Invalid payload: {e}", service="webhook")
-            raise HTTPException(status_code=400, detail="Invalid payload")
-        except stripe.error.SignatureVerificationError as e:
-            log_debug(f"Invalid signature: {e}", service="webhook")
-            raise HTTPException(status_code=400, detail="Invalid signature")
-    else:
-        # For development without webhook secret
-        import json
-        event = json.loads(payload)
-        log_debug("Warning: Processing webhook without signature verification", service="webhook")
+    # Verify webhook signature - REQUIRED for security
+    if not webhook_secret:
+        log_debug("STRIPE_WEBHOOK_SECRET not configured - rejecting webhook", service="webhook")
+        raise HTTPException(status_code=500, detail="Webhook processing not configured")
+
+    if not stripe_signature:
+        log_debug("Missing Stripe-Signature header - rejecting webhook", service="webhook")
+        raise HTTPException(status_code=400, detail="Missing signature header")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, stripe_signature, webhook_secret
+        )
+    except ValueError as e:
+        log_debug(f"Invalid payload: {e}", service="webhook")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError as e:
+        log_debug(f"Invalid signature: {e}", service="webhook")
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
     event_type = event.get("type") if isinstance(event, dict) else event.type
     log_debug(f"Received Stripe webhook: {event_type}", service="webhook")
