@@ -75,13 +75,12 @@ def determine_review_status(fields: Dict[str, Any]) -> Tuple[str, List[str]]:
             log_debug(f"Field {field_name} marked for review: low confidence", service="review")
             continue
     
-    # Determine final status
+    # All cards start in needs_review - users must manually review and save each card
+    review_status = "needs_review"
     if fields_needing_review:
-        review_status = "needs_review"
         log_debug(f"Card needs review - {len(fields_needing_review)} fields flagged", service="review")
     else:
-        review_status = "reviewed"
-        log_debug("Card does not need review - all fields valid", service="review")
+        log_debug("Card needs review - no fields flagged but requires manual approval", service="review")
     
     log_debug("Review determination complete", {
         "status": review_status,

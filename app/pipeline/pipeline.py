@@ -96,12 +96,12 @@ class CardProcessingPipeline:
                 "reason": "Using existing student data from database"
             }, service="pipeline")
 
-            # Mark as reviewed since it's from existing student
-            extraction_result.metadata["review_status"] = "reviewed"
+            # Existing students still need manual review approval
+            extraction_result.metadata["review_status"] = "needs_review"
             extraction_result.metadata["fields_needing_review"] = []
 
             log_debug("=== CARD PROCESSING PIPELINE COMPLETE ===", {
-                "review_status": "reviewed",
+                "review_status": "needs_review",
                 "fields_needing_review": [],
                 "total_fields": len(extraction_result.fields),
                 "skipped_stages": ["enhancement", "review"]
