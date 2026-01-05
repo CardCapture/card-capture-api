@@ -4,45 +4,54 @@ from datetime import datetime, timezone
 import json
 import os
 
+# Log levels: DEBUG=10, INFO=20, WARNING=30, ERROR=40
+# Only show console output if LOG_LEVEL is DEBUG (default for development)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG").upper()
+DEBUG_ENABLED = LOG_LEVEL == "DEBUG"
+
 def log_debug(message: str, data: Any = None, service: str = "general", verbose: bool = True):
     """
     Common logging function for all services.
-    
+
     Args:
         message: The message to log
         data: Optional data to log (dict, list, or string)
         service: Service name for log file and context (e.g., "gemini", "docai")
         verbose: Whether to log detailed data
+
+    Environment:
+        LOG_LEVEL: Set to INFO/WARNING/ERROR in production to suppress console debug output
     """
     timestamp = datetime.now(timezone.utc).isoformat()
-    log_entry = f"\n[{timestamp}] {message}\n"
-    
+    log_entry = f"[{timestamp}] [{service}] {message}"
+
     if data is not None:
         if verbose:
             if isinstance(data, (dict, list)):
-                log_entry += json.dumps(data, indent=2)
+                log_entry += "\n" + json.dumps(data, indent=2)
             else:
-                log_entry += str(data)
+                log_entry += f" | {str(data)}"
         else:
             # For non-verbose, just log summary
             if isinstance(data, dict):
-                log_entry += f"Keys: {list(data.keys())}\n"
+                log_entry += f" | Keys: {list(data.keys())}"
             elif isinstance(data, list):
-                log_entry += f"List length: {len(data)}\n"
+                log_entry += f" | List length: {len(data)}"
             else:
-                log_entry += str(data)
-        log_entry += "\n"
-    
-    # Ensure logs directory exists
-    os.makedirs("logs", exist_ok=True)
-    
-    # Write to service-specific log file
-    log_file = f"logs/{service}_debug.log"
-    with open(log_file, "a") as f:
-        f.write(log_entry)
-    
-    # Also print to stdout for Cloud Run logging
-    print(log_entry, flush=True)
+                log_entry += f" | {str(data)}"
+
+    # Always write to service-specific log file
+    try:
+        os.makedirs("logs", exist_ok=True)
+        log_file = f"logs/{service}_debug.log"
+        with open(log_file, "a") as f:
+            f.write(log_entry + "\n")
+    except Exception:
+        pass  # Don't fail on log write errors
+
+    # Only print to stdout if DEBUG is enabled
+    if DEBUG_ENABLED:
+        print(log_entry, flush=True)
 
 
 def retry_with_exponential_backoff(

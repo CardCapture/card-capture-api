@@ -34,4 +34,4 @@ async def get_current_user(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     except Exception as e:
         log(f"❌ Error decoding token or fetching user: {e}")
-        raise HTTPException(status_code=500, detail=f"Error decoding token or fetching user: {e}")
+        raise HTTPException(status_code=500, detail="Authentication error")

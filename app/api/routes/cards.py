@@ -38,7 +38,7 @@ async def archive_cards(payload: BulkActionPayload, user=Depends(get_current_use
     """
     Archive cards - standardized endpoint
     """
-    print(f"📁 Archive cards - document_ids: {payload.document_ids}")
+    log_debug(f"Archive cards - document_ids: {payload.document_ids}", service="cards")
     
     if not payload.document_ids:
         return JSONResponse(status_code=400, content={"error": "No document_ids provided"})
@@ -50,7 +50,7 @@ async def mark_as_exported(payload: BulkActionPayload, user=Depends(get_current_
     """
     Mark cards as exported - standardized endpoint
     """
-    print(f"📤 Mark as exported - document_ids: {payload.document_ids}")
+    log_debug(f"Mark as exported - document_ids: {payload.document_ids}", service="cards")
     
     if not payload.document_ids:
         return JSONResponse(status_code=400, content={"error": "No document_ids provided"})
@@ -62,7 +62,7 @@ async def delete_cards(payload: BulkActionPayload, user=Depends(get_current_user
     """
     Delete cards - standardized endpoint
     """
-    print(f"🗑️ Delete cards - document_ids: {payload.document_ids}")
+    log_debug(f"Delete cards - document_ids: {payload.document_ids}", service="cards")
     
     if not payload.document_ids:
         return JSONResponse(status_code=400, content={"error": "No document_ids provided"})
@@ -74,7 +74,7 @@ async def move_cards(payload: BulkActionPayload, user=Depends(get_current_user))
     """
     Move cards - standardized endpoint
     """
-    print(f"📦 Move cards - document_ids: {payload.document_ids}, status: {payload.status}")
+    log_debug(f"Move cards - document_ids: {payload.document_ids}, status: {payload.status}", service="cards")
     
     if not payload.document_ids:
         return JSONResponse(status_code=400, content={"error": "No document_ids provided"})
@@ -140,7 +140,7 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
                 
                 # If a field requires review but hasn't been manually marked as reviewed, it still needs review
                 if requires_review and not is_manually_reviewed:
-                    print(f"Field {field_name} needs review (requires_human_review: {requires_review}, manually_reviewed: {is_manually_reviewed})")
+                    log_debug(f"Field {field_name} needs review (requires_human_review: {requires_review}, manually_reviewed: {is_manually_reviewed})", service="cards")
                     any_required_field_needs_review = True
                     break
 
@@ -179,7 +179,7 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
             return response.data[0] if response.data else None
 
     except Exception as e:
-        print(f"Error saving review: {str(e)}")
+        log_debug(f"Error saving review: {str(e)}", service="cards")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -357,7 +357,7 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
         })
         
     except Exception as e:
-        print(f"Error marking field as reviewed: {str(e)}")
+        log_debug(f"Error marking field as reviewed: {str(e)}", service="cards")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cards/manual")
@@ -408,6 +408,5 @@ async def manual_entry(payload: Dict[str, Any] = Body(...), user=Depends(get_cur
         else:
             return JSONResponse(status_code=500, content={"error": "Failed to insert manual entry."})
     except Exception as e:
-        print(f"❌ Error creating manual entry: {e}")
-        traceback.print_exc()
-        return JSONResponse(status_code=500, content={"error": str(e)}) 
+        log_debug(f"Error creating manual entry: {e}", service="cards")
+        return JSONResponse(status_code=500, content={"error": "Failed to create manual entry"}) 

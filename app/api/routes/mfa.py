@@ -12,6 +12,7 @@ import hashlib
 from datetime import datetime, timezone, timedelta
 from app.core.clients import get_supabase_client
 from app.core.auth import get_current_user
+from app.utils.retry_utils import log_debug
 
 router = APIRouter(prefix="/mfa", tags=["MFA"])
 
@@ -91,7 +92,7 @@ def check_rate_limit(
                 'attempt_count': 1,
                 'window_start': now.isoformat()
             }).execute()
-            print(f"[Rate Limit] First {attempt_type} attempt for user {user_id}")
+            log_debug(f"Rate Limit: First {attempt_type} attempt for user {user_id}", service="mfa")
             return True, max_attempts - 1, None
 
         record = result.data[0]
@@ -109,7 +110,7 @@ def check_rate_limit(
                 .eq('user_id', user_id) \
                 .eq('attempt_type', attempt_type) \
                 .execute()
-            print(f"[Rate Limit] Window expired - reset counter for user {user_id}")
+            log_debug(f"Rate Limit: Window expired - reset counter for user {user_id}", service="mfa")
             return True, max_attempts - 1, None
 
         current_count = record['attempt_count']
@@ -117,7 +118,7 @@ def check_rate_limit(
         # Check if limit exceeded
         if current_count >= max_attempts:
             retry_after = (window_end - now).total_seconds() / 60.0
-            print(f"[Rate Limit] EXCEEDED for user {user_id} - {current_count}/{max_attempts} attempts, retry in {retry_after:.1f}min")
+            log_debug(f"Rate Limit: EXCEEDED for user {user_id} - {current_count}/{max_attempts} attempts, retry in {retry_after:.1f}min", service="mfa")
             return False, 0, retry_after
 
         # Increment attempt count
@@ -128,11 +129,11 @@ def check_rate_limit(
             .execute()
 
         remaining = max_attempts - (current_count + 1)
-        print(f"[Rate Limit] {attempt_type} attempt {current_count + 1}/{max_attempts} for user {user_id}, {remaining} remaining")
+        log_debug(f"Rate Limit: {attempt_type} attempt {current_count + 1}/{max_attempts} for user {user_id}, {remaining} remaining", service="mfa")
         return True, remaining, None
 
     except Exception as e:
-        print(f"[Rate Limit] Check failed: {e} - failing open (allowing request)")
+        log_debug(f"Rate Limit: Check failed: {e} - failing open (allowing request)", service="mfa")
         return True, max_attempts, None
 
 
@@ -152,7 +153,7 @@ async def get_user_factors(token: str) -> list:
         )
 
         if response.status_code != 200:
-            print(f"[Auth API] Failed to get user factors: {response.text}")
+            log_debug(f"Auth API: Failed to get user factors: {response.text}", service="mfa")
             return []
 
         user_data = response.json()
@@ -177,7 +178,7 @@ async def create_phone_factor(token: str, phone_number: str) -> Dict[str, Any]:
         )
 
         if response.status_code not in [200, 201]:
-            print(f"[Auth API] Failed to create phone factor: {response.text}")
+            log_debug(f"Auth API: Failed to create phone factor: {response.text}", service="mfa")
             raise HTTPException(
                 status_code=response.status_code,
                 detail="Failed to create MFA factor. Please check your phone number."
@@ -216,7 +217,7 @@ async def create_mfa_challenge(token: str, factor_id: str, user_ip: str) -> Dict
         )
 
         if response.status_code != 200:
-            print(f"[Auth API] Failed to create challenge: {response.text}")
+            log_debug(f"Auth API: Failed to create challenge: {response.text}", service="mfa")
             raise HTTPException(
                 status_code=response.status_code,
                 detail="Failed to send verification code. Please try again."
@@ -257,7 +258,7 @@ async def verify_mfa_challenge(
             elif "expired" in error_text:
                 raise HTTPException(status_code=400, detail="CODE_EXPIRED")
             else:
-                print(f"[Auth API] Verification failed: {response.text}")
+                log_debug(f"Auth API: Verification failed: {response.text}", service="mfa")
                 raise HTTPException(status_code=response.status_code, detail="Verification failed")
 
         return response.json()
@@ -283,9 +284,9 @@ def update_mfa_verified_timestamp(user_id: str) -> None:
         get_supabase_client().table('profiles').update({
             'mfa_verified_at': datetime.now(timezone.utc).isoformat()
         }).eq('id', user_id).execute()
-        print(f"[MFA] Set mfa_verified_at for user {user_id}")
+        log_debug(f"MFA] Set mfa_verified_at for user {user_id}", service="mfa")
     except Exception as e:
-        print(f"[MFA] Warning: Failed to set mfa_verified_at: {e}")
+        log_debug(f"MFA] Warning: Failed to set mfa_verified_at: {e}", service="mfa")
         # Don't fail the request
 
 
@@ -300,7 +301,7 @@ def save_trusted_device(user_id: str, device_token_hash: str, device_name: str) 
         'expires_at': expires_at.isoformat()
     }).execute()
 
-    print(f"[Device Trust] Saved new trusted device for user {user_id} (expires in {DEVICE_TRUST_DAYS} days)")
+    log_debug(f"Device Trust] Saved new trusted device for user {user_id} (expires in {DEVICE_TRUST_DAYS} days)", service="mfa")
     return expires_at
 
 
@@ -352,7 +353,7 @@ async def check_device(
         token_hash = hash_token(device_token)
         trusted = is_device_trusted(user_id, token_hash)
 
-        print(f"[Device Check] User {user_id} - Trusted: {trusted}")
+        log_debug(f"Device Check] User {user_id} - Trusted: {trusted}", service="mfa")
 
         if trusted:
             # Device is trusted - mark session as MFA verified
@@ -368,7 +369,7 @@ async def check_device(
         })
 
     except Exception as e:
-        print(f"[Device Check] Error: {e}")
+        log_debug(f"Device Check] Error: {e}", service="mfa")
         return JSONResponse(content={
             "trusted": False,
             "needs_mfa": True,
@@ -404,7 +405,7 @@ async def enroll(
                 detail=f"RATE_LIMITED|{int(retry_after or 15)}"
             )
 
-        print(f"[MFA Enroll] User {user_id} enrolling with phone {phone_number}")
+        log_debug(f"MFA Enroll] User {user_id} enrolling with phone {phone_number}", service="mfa")
 
         # Check if user already has verified factors
         existing_factors = await get_user_factors(token)
@@ -415,7 +416,7 @@ async def enroll(
 
         if verified_phone_factors:
             # User already enrolled - just send a new challenge
-            print(f"[MFA Enroll] User already has verified factor, sending challenge")
+            log_debug(f"MFA Enroll] User already has verified factor, sending challenge", service="mfa")
             factor = verified_phone_factors[0]
             challenge = await create_mfa_challenge(token, factor['id'], user_ip)
 
@@ -439,12 +440,12 @@ async def enroll(
             if f.get('factor_type') == 'phone' and f.get('status') == 'unverified'
         ]
         for old_factor in unverified_factors:
-            print(f"[MFA Enroll] Deleting old unverified factor {old_factor['id']}")
+            log_debug(f"MFA Enroll] Deleting old unverified factor {old_factor['id']}", service="mfa")
             await delete_phone_factor(token, old_factor['id'])
 
         # Create new phone factor
         factor = await create_phone_factor(token, phone_number)
-        print(f"[MFA Enroll] Created new factor {factor['id']}")
+        log_debug(f"MFA Enroll] Created new factor {factor['id']}", service="mfa")
 
         # Send verification code
         challenge = await create_mfa_challenge(token, factor['id'], user_ip)
@@ -468,7 +469,7 @@ async def enroll(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[MFA Enroll] Error: {e}")
+        log_debug(f"MFA Enroll] Error: {e}", service="mfa")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -504,7 +505,7 @@ async def verify_enrollment(
                 detail=f"RATE_LIMITED|{int(retry_after or 15)}"
             )
 
-        print(f"[MFA Verify Enrollment] User {user_id} verifying code ({remaining} attempts remaining)")
+        log_debug(f"MFA Verify Enrollment] User {user_id} verifying code ({remaining} attempts remaining)", service="mfa")
 
         # Verify the code
         verify_result = await verify_mfa_challenge(token, factor_id, challenge_id, code, user_ip)
@@ -532,7 +533,7 @@ async def verify_enrollment(
         # Mark session as MFA verified
         update_mfa_verified_timestamp(user_id)
 
-        print(f"[MFA Verify Enrollment] Successfully enrolled user {user_id}")
+        log_debug(f"MFA Verify Enrollment] Successfully enrolled user {user_id}", service="mfa")
 
         response_data = {
             "success": True,
@@ -561,7 +562,7 @@ async def verify_enrollment(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[MFA Verify Enrollment] Error: {e}")
+        log_debug(f"MFA Verify Enrollment] Error: {e}", service="mfa")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -591,7 +592,7 @@ async def challenge(
                 detail=f"RATE_LIMITED|{int(retry_after or 15)}"
             )
 
-        print(f"[MFA Challenge] User {user_id} requesting challenge")
+        log_debug(f"MFA Challenge] User {user_id} requesting challenge", service="mfa")
 
         # Get MFA settings
         settings = get_mfa_settings(user_id)
@@ -605,7 +606,7 @@ async def challenge(
         # Validate phone number exists
         phone_number = settings.get('phone_number', '')
         if not phone_number or phone_number.strip() == '':
-            print(f"[MFA Challenge] ERROR: MFA enabled but no phone number for user {user_id}")
+            log_debug(f"MFA Challenge] ERROR: MFA enabled but no phone number for user {user_id}", service="mfa")
             return JSONResponse(content={
                 "mfa_required": True,
                 "error": "PHONE_REQUIRED",
@@ -620,7 +621,7 @@ async def challenge(
         ]
 
         if not verified_factors:
-            print(f"[MFA Challenge] No verified factors for user {user_id}")
+            log_debug(f"MFA Challenge] No verified factors for user {user_id}", service="mfa")
             return JSONResponse(content={
                 "mfa_required": True,
                 "error": "NO_VERIFIED_FACTOR",
@@ -636,7 +637,7 @@ async def challenge(
             'last_challenge_at': datetime.now(timezone.utc).isoformat()
         }).eq('user_id', user_id).execute()
 
-        print(f"[MFA Challenge] Challenge sent to user {user_id}")
+        log_debug(f"MFA Challenge] Challenge sent to user {user_id}", service="mfa")
 
         return JSONResponse(content={
             "mfa_required": True,
@@ -648,7 +649,7 @@ async def challenge(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[MFA Challenge] Error: {e}")
+        log_debug(f"MFA Challenge] Error: {e}", service="mfa")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -683,7 +684,7 @@ async def verify(
                 detail=f"RATE_LIMITED|{int(retry_after or 15)}"
             )
 
-        print(f"[MFA Verify] User {user_id} verifying code ({remaining} attempts remaining)")
+        log_debug(f"MFA Verify] User {user_id} verifying code ({remaining} attempts remaining)", service="mfa")
 
         # Verify the code
         verify_result = await verify_mfa_challenge(token, factor_id, challenge_id, code, user_ip)
@@ -691,7 +692,7 @@ async def verify(
         # Mark session as MFA verified
         update_mfa_verified_timestamp(user_id)
 
-        print(f"[MFA Verify] Successfully verified user {user_id}")
+        log_debug(f"MFA Verify] Successfully verified user {user_id}", service="mfa")
 
         response_data = {
             "success": True,
@@ -720,7 +721,7 @@ async def verify(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[MFA Verify] Error: {e}")
+        log_debug(f"MFA Verify] Error: {e}", service="mfa")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -765,7 +766,7 @@ async def status(
         })
 
     except Exception as e:
-        print(f"[MFA Status] Error: {e}")
+        log_debug(f"MFA Status] Error: {e}", service="mfa")
         return JSONResponse(content={
             "error": str(e),
             "needs_enrollment": True

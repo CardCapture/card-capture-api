@@ -8,14 +8,14 @@ from app.controllers.uploads_controller import (
 )
 from app.core.auth import get_current_user
 from app.services.signup_service import process_signup_sheet
+from app.utils.retry_utils import log_debug
 from app.utils.storage import upload_to_supabase_storage_from_path
 from app.core.clients import get_supabase_client
 import tempfile
 import os
 import uuid
 
-print("UPLOAD ROUTER FILE:", __file__)
-print("MODULE NAME:", __name__)
+# Module initialization logging removed for production
 
 router = APIRouter(tags=["Uploads"])
 
@@ -92,7 +92,7 @@ async def upload_signup_sheet(
             if optimized_path != tmp_file_path:
                 tmp_file_path = optimized_path
         except Exception as e:
-            print(f"[SIGNUP DEBUG] Image optimization failed, using original: {e}")
+            log_debug(f"Image optimization failed, using original: {e}", service="uploads")
             # Continue with original file if optimization fails
         
         try:

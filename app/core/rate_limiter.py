@@ -44,10 +44,6 @@ class RateLimiter:
             True if within limits, False if exceeded
         """
         ip_address = self._get_client_ip(request)
-        
-        # Skip rate limiting for localhost during development
-        if ip_address in ['127.0.0.1', '::1', 'localhost']:
-            return True
         window_start = datetime.utcnow() - timedelta(minutes=self.window_minutes)
         
         try:
@@ -84,10 +80,6 @@ class RateLimiter:
         Returns:
             True if within limits, False if exceeded
         """
-        # Skip email rate limiting for testing emails during development
-        if email.endswith(('@gmail.com', '@example.com')) and any(test_word in email for test_word in ['test', 'kregboyd']):
-            return True
-            
         window_start = datetime.utcnow() - timedelta(minutes=self.window_minutes)
         email_hash = self._hash_email(email)
         
