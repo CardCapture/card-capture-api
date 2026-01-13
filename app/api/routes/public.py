@@ -318,6 +318,8 @@ async def submit_universal_event(request: UniversalEventSubmissionRequest) -> Di
             "state": request.state or "TX",
             "zip": request.zip,
             "description": request.description,
+            "needs_inquiry_cards": request.needs_inquiry_cards or False,
+            "expected_students": request.expected_students,
             "status": "active"
         }
 

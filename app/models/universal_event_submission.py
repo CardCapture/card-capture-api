@@ -27,6 +27,8 @@ class UniversalEventSubmissionRequest(BaseModel):
     state: Optional[str] = "TX"
     zip: Optional[str] = None
     description: Optional[str] = None
+    needs_inquiry_cards: Optional[bool] = False
+    expected_students: Optional[int] = None
 
     @field_validator("name")
     @classmethod
@@ -69,6 +71,17 @@ class UniversalEventSubmissionRequest(BaseModel):
         if v is None:
             return "TX"
         return v.upper()[:2]
+
+    @field_validator("expected_students")
+    @classmethod
+    def validate_expected_students(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return None
+        if v < 1:
+            raise ValueError("Expected students must be at least 1")
+        if v > 50000:
+            raise ValueError("Expected students seems unreasonably high")
+        return v
 
 
 class UniversalEventSubmissionResponse(BaseModel):
