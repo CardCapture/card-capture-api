@@ -386,11 +386,15 @@ async def search_universal_events(
 
     repo = UniversalEventsRepository()
 
-    # Parse dates
+    # Parse dates - default to today if no date_from specified
+    # This ensures users see upcoming events by default, not past events
     parsed_date_from = None
     parsed_date_to = None
     if date_from:
         parsed_date_from = date_type.fromisoformat(date_from)
+    else:
+        # Default to today's date to show only upcoming events
+        parsed_date_from = date_type.today()
     if date_to:
         parsed_date_to = date_type.fromisoformat(date_to)
 
