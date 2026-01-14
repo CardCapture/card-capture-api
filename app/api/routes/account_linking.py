@@ -236,6 +236,11 @@ async def approve_link_request(
             "school_id": target_school_id
         }).eq("school_id", old_school_id).execute()
 
+        # Transfer processing_jobs to the new school
+        supabase.table("processing_jobs").update({
+            "school_id": target_school_id
+        }).eq("school_id", old_school_id).execute()
+
         # Delete the virtual school if it's empty
         supabase.table("schools").delete().eq("id", old_school_id).eq("is_virtual_school", True).execute()
 
