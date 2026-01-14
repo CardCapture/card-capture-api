@@ -162,11 +162,11 @@ class CardProcessingPipeline:
         3. If exists → Skip Gemini, use existing data
         4. If not exists → Run Gemini as normal
         """
-        # Get DocAI processor ID for school
+        # Get DocAI processor ID for school (fall back to default universal card processor if not set)
         supabase = get_supabase_client()
         school_query = supabase.table("schools").select("docai_processor_id").eq("id", context.school_id).maybe_single().execute()
         from app.config import DOCAI_PROCESSOR_ID
-        processor_id = school_query.data.get("docai_processor_id") if school_query.data else DOCAI_PROCESSOR_ID
+        processor_id = (school_query.data.get("docai_processor_id") if school_query.data else None) or DOCAI_PROCESSOR_ID
 
         # Run DocAI (now returns 4 values including serial number)
         log_debug("Running DocAI extraction", {"processor_id": processor_id}, service="pipeline")
