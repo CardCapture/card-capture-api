@@ -29,7 +29,7 @@ grpcio-status==1.62.3
 h11==0.14.0
 httpcore>=1.0.0
 httplib2==0.22.0
-httpx>=0.26.0
+httpx>=0.26.0,<0.28.0
 idna==3.10
 numpy==2.0.2
 opencv-python==4.11.0.86
