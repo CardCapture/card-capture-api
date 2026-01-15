@@ -68,33 +68,9 @@ class TestFieldSplitterEnhancer:
         assert result['state'].value == 'TX'
         
         assert 'zip_code' not in result
-    
-    def test_split_name_fields(self):
-        """Test splitting full name into first and last"""
-        fields = {
-            'name': FieldData(value='John Smith', confidence=0.9, source='test')
-        }
-        
-        result = self.enhancer.enhance(fields, self.context)
-        
-        assert 'first_name' in result
-        assert result['first_name'].value == 'John'
-        assert result['first_name'].source == 'name_split'
-        
-        assert 'last_name' in result  
-        assert result['last_name'].value == 'Smith'
-    
-    def test_split_name_multiple_parts(self):
-        """Test splitting name with multiple parts"""
-        fields = {
-            'name': FieldData(value='John Michael Smith Jr.', confidence=0.9, source='test')
-        }
-        
-        result = self.enhancer.enhance(fields, self.context)
-        
-        assert result['first_name'].value == 'John'
-        assert result['last_name'].value == 'Michael Smith Jr.'
-    
+
+    # Note: Name splitting tests removed - that functionality is now in CanonicalFieldMapperEnhancer
+
     def test_dont_overwrite_existing_fields(self):
         """Test that existing fields aren't overwritten"""
         fields = {
