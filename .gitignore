@@ -29,10 +29,10 @@ worker_v2_debug.log
 *.swp
 *.swo
 
-# Debug and test files
+# Debug and test files (in root directory only, not in tests/ subdirectories)
 output_*.png
 output_*.jpg
-test_*.py
+/test_*.py
 *_simple.py
 variables.env.backup
 
