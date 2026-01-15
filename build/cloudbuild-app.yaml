@@ -1,5 +1,24 @@
 steps:
+  # Run tests first before building images
+  - name: "python:3.9-slim"
+    id: "run-tests"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        pip install --quiet -r requirements.txt
+        pip install --quiet pytest pytest-asyncio pytest-cov
+        pytest tests/ app/pipeline/tests/ -v --tb=short -x
+    env:
+      - "ENVIRONMENT=test"
+      - "SUPABASE_URL=https://test.supabase.co"
+      - "SUPABASE_SERVICE_ROLE_KEY=test-key"
+      - "SUPABASE_ANON_KEY=test-anon-key"
+
+  # Build main backend Docker image (only runs if tests pass)
   - name: "gcr.io/cloud-builders/docker"
+    id: "build-backend"
+    waitFor: ["run-tests"]
     args:
       [
         "build",
@@ -12,7 +31,11 @@ steps:
         "Dockerfile",
         ".",
       ]
+
+  # Build worker Docker image (only runs if tests pass)
   - name: "gcr.io/cloud-builders/docker"
+    id: "build-worker"
+    waitFor: ["run-tests"]
     args:
       [
         "build",
@@ -25,30 +48,40 @@ steps:
         "Dockerfile.worker",
         ".",
       ]
+
+  # Push backend images
   - name: "gcr.io/cloud-builders/docker"
+    waitFor: ["build-backend"]
     args:
       [
         "push",
         "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX:$BUILD_ID",
       ]
   - name: "gcr.io/cloud-builders/docker"
+    waitFor: ["build-backend"]
     args:
       [
         "push",
         "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_BE_IMAGE_NAME_SUFFIX:latest",
       ]
+
+  # Push worker images
   - name: "gcr.io/cloud-builders/docker"
+    waitFor: ["build-worker"]
     args:
       [
         "push",
         "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX:$BUILD_ID",
       ]
   - name: "gcr.io/cloud-builders/docker"
+    waitFor: ["build-worker"]
     args:
       [
         "push",
         "us-central1-docker.pkg.dev/$PROJECT_ID/card-capture/$_WORKER_IMAGE_NAME_SUFFIX:latest",
       ]
+
+  # Deploy backend to Cloud Run
   - name: "gcr.io/cloud-builders/gcloud"
     args:
       [
@@ -63,6 +96,8 @@ steps:
         "us-central1",
         "--allow-unauthenticated",
       ]
+
+  # Deploy worker to Cloud Run
   - name: "gcr.io/cloud-builders/gcloud"
     args:
       [
