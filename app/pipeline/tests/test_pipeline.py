@@ -47,13 +47,15 @@ class TestCardProcessingPipeline:
         )
         mock_supabase.return_value = mock_client
         
-        # Mock DocAI
+        # Mock DocAI (returns 4 values: fields, cropped_path, ocr_text, serial_number)
         mock_docai.return_value = (
             {
                 'first_name': {'value': 'John', 'confidence': 0.8, 'source': 'docai'},
                 'last_name': {'value': 'Doe', 'confidence': 0.8, 'source': 'docai'}
             },
-            '/tmp/cropped.jpg'
+            '/tmp/cropped.jpg',
+            'OCR text here',
+            None  # serial_number
         )
         
         # Mock Gemini  
@@ -112,15 +114,16 @@ class TestCardProcessingPipeline:
     def test_enhancer_order_matters(self):
         """Test that enhancers are in the correct order"""
         enhancer_names = [e.__class__.__name__ for e in self.pipeline.enhancers]
-        
+
         expected_order = [
-            'FieldSplitterEnhancer',        # Must be first - splits combined fields
-            'FieldRequirementsEnhancer',    # Applies school settings  
+            'CanonicalFieldMapperEnhancer', # Maps name -> first_name/last_name
+            'FieldSplitterEnhancer',        # Splits combined fields
+            'FieldRequirementsEnhancer',    # Applies school settings
             'DataCleanerEnhancer',          # Cleans data before validation
             'AddressValidationEnhancer',    # Validates addresses
             'HighSchoolMatcherEnhancer'     # Matches high schools
         ]
-        
+
         assert enhancer_names == expected_order
     
     @patch('app.pipeline.pipeline.get_supabase_client')
@@ -199,7 +202,7 @@ class TestCardProcessingPipeline:
             )
             mock_supabase.return_value = mock_client
             
-            mock_docai.return_value = ({'test': {'value': 'test', 'confidence': 0.8}}, '/tmp/test.jpg')
+            mock_docai.return_value = ({'test': {'value': 'test', 'confidence': 0.8}}, '/tmp/test.jpg', 'OCR text', None)
             mock_gemini.return_value = {'test': {'value': 'test', 'confidence': 0.8}}
             mock_get_req.return_value = {}
             mock_sync_req.return_value = {}
