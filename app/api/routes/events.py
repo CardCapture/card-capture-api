@@ -20,8 +20,8 @@ from app.utils.retry_utils import log_debug
 
 router = APIRouter(tags=["Events"])
 
-# Event price in cents ($25.00)
-EVENT_PRICE_CENTS = 2500
+# Event price in cents ($17.00)
+EVENT_PRICE_CENTS = 1700
 
 
 class AdminEventPurchaseRequest(BaseModel):

@@ -18,8 +18,8 @@ from app.models.recruiter_signup import (
 )
 
 
-# Event price in cents ($25.00)
-EVENT_PRICE_CENTS = 2500
+# Event price in cents ($17.00)
+EVENT_PRICE_CENTS = 1700
 
 
 class RecruiterSignupService:

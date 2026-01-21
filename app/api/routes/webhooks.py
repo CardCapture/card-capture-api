@@ -280,7 +280,7 @@ async def handle_checkout_completed(session: dict):
 
         # Send post-purchase emails (receipt + invite admins if applicable)
         if purchased_events:
-            total_amount = len(purchased_events) * 2500  # $25 per event
+            total_amount = len(purchased_events) * 1700  # $17 per event
             await send_post_purchase_emails(
                 supabase=supabase,
                 user_id=user_id,
@@ -370,8 +370,8 @@ async def handle_account_linking(
         if not recruiter_name:
             recruiter_name = profile.get("email", "Unknown")
 
-        # Calculate total amount ($25 per event)
-        total_amount = len(purchased_events) * 2500
+        # Calculate total amount ($17 per event)
+        total_amount = len(purchased_events) * 1700
 
         email_result = notification_service.send_link_request_to_admins(
             school_id=parent_school_id,

@@ -18,7 +18,7 @@ class EventPurchasesRepository:
         user_id: str,
         universal_event_id: str,
         stripe_checkout_session_id: str,
-        amount: int = 2500,
+        amount: int = 1700,
         currency: str = "usd"
     ) -> Dict[str, Any]:
         """

@@ -903,7 +903,7 @@ class NotificationService:
 
         # Format amount
         total_display = f"${total_amount / 100:.2f}"
-        per_event_display = "$25.00"
+        per_event_display = "$17.00"
 
         # Format date
         try:

@@ -179,8 +179,8 @@ async def _handle_account_linking_inline(
         if not recruiter_name:
             recruiter_name = profile.get("email", "Unknown")
 
-        # Calculate total amount ($25 per event)
-        total_amount = len(purchased_events) * 2500
+        # Calculate total amount ($17 per event)
+        total_amount = len(purchased_events) * 1700
 
         email_result = notification_service.send_link_request_to_admins(
             school_id=parent_school_id,
@@ -359,7 +359,7 @@ async def recruiter_signup(request: RecruiterSignupRequest) -> RecruiterSignupRe
     Flow:
     1. Create user account
     2. Handle school selection (existing or new)
-    3. Create Stripe checkout session ($25)
+    3. Create Stripe checkout session ($17)
     4. Return checkout URL for payment
 
     After successful payment, the webhook will:
@@ -551,7 +551,7 @@ async def verify_payment(session_id: str) -> Dict[str, Any]:
 
         if created_event_ids:
             # Calculate total amount (number of events * price per event)
-            total_amount = len(purchased_events) * 2500  # $25 per event
+            total_amount = len(purchased_events) * 1700  # $17 per event
 
             # Send post-purchase emails (receipt + invite admins if applicable)
             await _send_post_purchase_emails(
