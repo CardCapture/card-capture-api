@@ -118,19 +118,20 @@ class FormSessionManager:
     
     def set_session_cookie(self, response: Response, token: str):
         """Set session cookie in response"""
-        # Use secure cookies in production (HTTPS), allow HTTP in development
-        is_production = os.getenv("ENVIRONMENT") == "production"
+        # Use secure cookies in production/staging (HTTPS), allow HTTP in development
+        environment = os.getenv("ENVIRONMENT", "development")
+        is_deployed = environment in ("production", "staging")
 
         response.set_cookie(
             key=self.COOKIE_NAME,
             value=token,
             max_age=self.SESSION_TTL_MINUTES * 60,
             httponly=True,
-            secure=is_production,  # True in production (HTTPS), False in dev (HTTP)
-            samesite="lax",
+            secure=is_deployed,  # True in production/staging (HTTPS), False in dev (HTTP)
+            samesite="none" if is_deployed else "lax",  # Cross-origin requires "none"
             path="/"
         )
-        log_debug(f"Session cookie set (secure={is_production})", service="session_manager")
+        log_debug(f"Session cookie set (secure={is_deployed}, samesite={'none' if is_deployed else 'lax'})", service="session_manager")
     
     def get_session_from_cookie(self, request: Request) -> Optional[str]:
         """Get session token from cookie"""
@@ -140,9 +141,14 @@ class FormSessionManager:
     
     def clear_session_cookie(self, response: Response):
         """Clear session cookie"""
+        environment = os.getenv("ENVIRONMENT", "development")
+        is_deployed = environment in ("production", "staging")
+
         response.delete_cookie(
             key=self.COOKIE_NAME,
-            path="/"
+            path="/",
+            secure=is_deployed,
+            samesite="none" if is_deployed else "lax"
         )
         log_debug("Session cookie cleared", service="session_manager")
     
