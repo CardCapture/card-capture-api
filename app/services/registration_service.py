@@ -73,38 +73,46 @@ class RegistrationService:
     
     async def start_email_registration(self, email: str) -> Dict[str, Any]:
         """Start registration via email/magic link
-        
+
         Returns:
             Success status and message
         """
         # Validate email
         if not self._validate_email(email):
             raise HTTPException(status_code=400, detail="Invalid or disposable email address")
-        
+
+        # Check if student already exists
+        existing_student = get_student_by_email(email)
+        is_returning_user = existing_student is not None
+
         # Create magic link for registration
         token = create_magic_link_db(
             self.supabase,
             email,
             "registration",
-            {"purpose": "student_registration"}
+            {"purpose": "student_registration", "is_returning": is_returning_user}
         )
-        
-        # Send magic link email
+
+        # Send appropriate email based on whether user exists
         if self.resend_api_key:
-            await self._send_registration_magic_link(email, token)
+            if is_returning_user:
+                await self._send_returning_user_magic_link(email, token, existing_student.get("first_name"))
+            else:
+                await self._send_registration_magic_link(email, token)
         else:
             log_debug(f"Email service not configured, magic link: {self.frontend_url}/register/verify?token={token}", service="registration")
-        
+
         # Log metric
         await self._log_metric(
             funnel_step="email_started",
             source_method="magic_link",
-            metadata={"email": email}
+            metadata={"email": email, "is_returning": is_returning_user}
         )
-        
+
         return {
             "success": True,
-            "message": "Check your email for the registration link"
+            "message": "Check your email to update your profile" if is_returning_user else "Check your email for the registration link",
+            "is_returning": is_returning_user
         }
     
     async def verify_event_code(self, code: str) -> Dict[str, Any]:
@@ -390,7 +398,57 @@ class RegistrationService:
             log_debug(f"Error type: {type(e).__name__}", service="registration")
             log_debug(f"📧 Manual registration link: {magic_url}", service="registration")
             raise HTTPException(status_code=500, detail="Failed to send registration email")
-    
+
+    async def _send_returning_user_magic_link(self, email: str, token: str, first_name: str = None):
+        """Send magic link email for returning users to edit their profile"""
+        if not self.resend_api_key:
+            log_debug(f"No Resend API key configured. Manual link: {self.frontend_url}/register/verify?token={token}", service="registration")
+            return
+
+        magic_url = f"{self.frontend_url}/register/verify?token={token}"
+        greeting = f"Hi {first_name}," if first_name else "Welcome back,"
+
+        try:
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Update your CardCapture profile</title>
+            </head>
+            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h2 style="color: #1e293b;">{greeting}</h2>
+                    <p>You already have a CardCapture profile! Click below to view or update your information.</p>
+                    <div style="text-align: center; margin: 40px 0;">
+                        <a href="{magic_url}"
+                           style="display: inline-block; padding: 16px 32px; background-color: #3B82F6; color: white; text-decoration: none; border-radius: 8px; font-weight: 600;">
+                            Edit My Profile →
+                        </a>
+                    </div>
+                    <p style="font-size: 14px; color: #666;">🔒 This link is secure and expires in 24 hours for your protection.</p>
+                    <p style="font-size: 14px; color: #666;">If you didn't request this, you can safely ignore this email.</p>
+                </div>
+            </body>
+            </html>
+            """
+
+            params = {
+                "from": "CardCapture <no-reply@cardcapture.io>",
+                "to": [email],
+                "subject": "Update your CardCapture profile",
+                "html": html_content
+            }
+
+            response = resend.Emails.send(params)
+            log_debug(f"Returning user magic link sent to {email}. Response ID: {response.get('id', 'unknown')}", service="registration")
+
+        except Exception as e:
+            log_debug(f"Failed to send returning user email: {str(e)}", service="registration")
+            log_debug(f"📧 Manual profile link: {magic_url}", service="registration")
+            raise HTTPException(status_code=500, detail="Failed to send email")
+
     def _load_registration_email_template(self, magic_url: str) -> str:
         """Load and populate the registration email template"""
         template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 

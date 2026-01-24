@@ -181,20 +181,32 @@ async def verify_magic_link(
 
 @router.get("/form-session")
 async def get_form_session(request: Request):
-    """Get current form session data"""
+    """Get current form session data, including existing student data if found"""
+    from app.repositories.students_repository import get_student_by_email
+
     try:
         log_debug(f"Form session request from {request.client.host if request.client else 'unknown'}", service="registration_api")
         session = await form_session_manager.get_session_from_request(request)
         log_debug(f"Session retrieved: {session is not None}", service="registration_api")
         if not session:
             raise HTTPException(status_code=401, detail="No valid session")
-        
-        return {
+
+        response_data = {
             "session_type": session["session_type"],
             "email": session.get("email"),
             "metadata": session.get("metadata", {})
         }
-        
+
+        # Check for existing student and include their data for pre-filling
+        email = session.get("email")
+        if email:
+            existing_student = get_student_by_email(email)
+            if existing_student:
+                log_debug(f"Found existing student for {email}, including data for pre-fill", service="registration_api")
+                response_data["existing_student"] = existing_student
+
+        return response_data
+
     except HTTPException:
         raise
     except Exception as e:
