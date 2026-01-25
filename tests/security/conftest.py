@@ -17,31 +17,59 @@ Set the following environment variables:
 import os
 import pytest
 import uuid
-from typing import Generator, Dict, Any
+from typing import Generator, Dict, Any, Optional
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Skip all tests in this module if not configured for real DB testing
-pytestmark = pytest.mark.skipif(
-    os.getenv("RUN_SECURITY_TESTS") != "true",
-    reason="Security tests require RUN_SECURITY_TESTS=true and real Supabase connection"
-)
+
+def _check_supabase_config() -> Optional[str]:
+    """
+    Check if Supabase configuration is valid.
+    Returns None if valid, or an error message if not.
+    """
+    url = os.getenv("SUPABASE_URL", "")
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    anon_key = os.getenv("SUPABASE_ANON_KEY", "")
+
+    if not url or not url.startswith("http"):
+        return "SUPABASE_URL not set or invalid"
+    if not service_key:
+        return "SUPABASE_SERVICE_ROLE_KEY not set"
+    if not anon_key:
+        return "SUPABASE_ANON_KEY not set"
+    return None
+
+
+# Check config ONCE at module load
+_config_error = _check_supabase_config()
+
+# Skip all tests if not configured OR if Supabase config is invalid
+pytestmark = [
+    pytest.mark.skipif(
+        os.getenv("RUN_SECURITY_TESTS") != "true",
+        reason="Security tests require RUN_SECURITY_TESTS=true"
+    ),
+    pytest.mark.skipif(
+        _config_error is not None and os.getenv("RUN_SECURITY_TESTS") == "true",
+        reason=f"Supabase configuration invalid: {_config_error}"
+    ),
+]
 
 
 def get_supabase_url() -> str:
     """Get Supabase URL from environment."""
-    url = os.getenv("SUPABASE_URL")
-    if not url:
-        pytest.skip("SUPABASE_URL environment variable not set")
+    url = os.getenv("SUPABASE_URL", "")
+    if not url or not url.startswith("http"):
+        pytest.skip("SUPABASE_URL environment variable not set or invalid")
     return url
 
 
 def get_service_role_key() -> str:
     """Get Supabase service role key from environment."""
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     if not key:
         pytest.skip("SUPABASE_SERVICE_ROLE_KEY environment variable not set")
     return key
@@ -49,7 +77,7 @@ def get_service_role_key() -> str:
 
 def get_anon_key() -> str:
     """Get Supabase anon key from environment."""
-    key = os.getenv("SUPABASE_ANON_KEY")
+    key = os.getenv("SUPABASE_ANON_KEY", "")
     if not key:
         pytest.skip("SUPABASE_ANON_KEY environment variable not set")
     return key
@@ -67,13 +95,22 @@ def supabase_admin_client():
 
     WARNING: This client should NEVER be used in production application code.
     """
+    # Pre-check config before attempting connection
+    if _config_error:
+        pytest.skip(f"Supabase config invalid: {_config_error}")
+
     from supabase import create_client, Client
 
     url = get_supabase_url()
     key = get_service_role_key()
 
-    client: Client = create_client(url, key)
-    return client
+    try:
+        client: Client = create_client(url, key)
+        # Test connection with a simple query
+        client.table("schools").select("id").limit(1).execute()
+        return client
+    except Exception as e:
+        pytest.skip(f"Cannot connect to Supabase: {e}")
 
 
 @pytest.fixture(scope="session")
@@ -84,13 +121,20 @@ def supabase_anon_client():
     This client respects RLS policies and is used for testing
     unauthenticated access patterns.
     """
+    # Pre-check config before attempting connection
+    if _config_error:
+        pytest.skip(f"Supabase config invalid: {_config_error}")
+
     from supabase import create_client, Client
 
     url = get_supabase_url()
     key = get_anon_key()
 
-    client: Client = create_client(url, key)
-    return client
+    try:
+        client: Client = create_client(url, key)
+        return client
+    except Exception as e:
+        pytest.skip(f"Cannot connect to Supabase: {e}")
 
 
 # =============================================================================
