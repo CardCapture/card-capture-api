@@ -22,7 +22,10 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+# IMPORTANT: override=True is required because tests/conftest.py sets placeholder values
+# for unit tests. Security tests need REAL credentials to test RLS policies.
+# See: https://pypi.org/project/python-dotenv/
+load_dotenv(override=True)
 
 
 def _check_supabase_config() -> Optional[str]:
@@ -171,7 +174,7 @@ def test_school_1(supabase_admin_client) -> Generator[Dict[str, Any], None, None
             # Delete in order due to foreign key constraints
             supabase_admin_client.table("crm_events").delete().eq("school_id", school_id).execute()
             supabase_admin_client.table("events").delete().eq("school_id", school_id).execute()
-            supabase_admin_client.table("user_profiles").delete().eq("school_id", school_id).execute()
+            supabase_admin_client.table("profiles").delete().eq("school_id", school_id).execute()
             supabase_admin_client.table("schools").delete().eq("id", school_id).execute()
         except Exception as e:
             print(f"Cleanup warning for school_1: {e}")
@@ -203,7 +206,7 @@ def test_school_2(supabase_admin_client) -> Generator[Dict[str, Any], None, None
         try:
             supabase_admin_client.table("crm_events").delete().eq("school_id", school_id).execute()
             supabase_admin_client.table("events").delete().eq("school_id", school_id).execute()
-            supabase_admin_client.table("user_profiles").delete().eq("school_id", school_id).execute()
+            supabase_admin_client.table("profiles").delete().eq("school_id", school_id).execute()
             supabase_admin_client.table("schools").delete().eq("id", school_id).execute()
         except Exception as e:
             print(f"Cleanup warning for school_2: {e}")
@@ -234,7 +237,7 @@ def test_user_school_1(supabase_admin_client, test_school_1) -> Generator[Dict[s
     }
 
     try:
-        response = supabase_admin_client.table("user_profiles").insert(user_data).execute()
+        response = supabase_admin_client.table("profiles").insert(user_data).execute()
 
         if response.data:
             yield response.data[0]
@@ -242,7 +245,7 @@ def test_user_school_1(supabase_admin_client, test_school_1) -> Generator[Dict[s
             yield user_data
     finally:
         try:
-            supabase_admin_client.table("user_profiles").delete().eq("id", user_id).execute()
+            supabase_admin_client.table("profiles").delete().eq("id", user_id).execute()
         except Exception as e:
             print(f"Cleanup warning for user_school_1: {e}")
 
@@ -267,7 +270,7 @@ def test_user_school_2(supabase_admin_client, test_school_2) -> Generator[Dict[s
     }
 
     try:
-        response = supabase_admin_client.table("user_profiles").insert(user_data).execute()
+        response = supabase_admin_client.table("profiles").insert(user_data).execute()
 
         if response.data:
             yield response.data[0]
@@ -275,7 +278,7 @@ def test_user_school_2(supabase_admin_client, test_school_2) -> Generator[Dict[s
             yield user_data
     finally:
         try:
-            supabase_admin_client.table("user_profiles").delete().eq("id", user_id).execute()
+            supabase_admin_client.table("profiles").delete().eq("id", user_id).execute()
         except Exception as e:
             print(f"Cleanup warning for user_school_2: {e}")
 

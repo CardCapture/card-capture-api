@@ -354,7 +354,7 @@ class TestSearchPathExploitScenario:
            AS $$
            BEGIN
                RETURN EXISTS (
-                   SELECT 1 FROM user_profiles
+                   SELECT 1 FROM profiles
                    WHERE id = auth.uid()
                    AND 'admin' = ANY(role)
                );

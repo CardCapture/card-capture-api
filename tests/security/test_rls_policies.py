@@ -396,21 +396,21 @@ class TestSchoolsRLS:
 
 class TestUserProfilesRLS:
     """
-    Tests for user_profiles table RLS policies.
+    Tests for profiles table RLS policies.
 
     Users should only see profiles from their own school.
     """
 
-    def test_user_profiles_isolation(
+    def test_profiles_isolation(
         self,
         supabase_admin_client,
         test_user_school_1,
         test_user_school_2,
     ):
         """
-        Test that user_profiles are properly isolated by school.
+        Test that profiles are properly isolated by school.
         """
-        response = supabase_admin_client.table("user_profiles").select("*").execute()
+        response = supabase_admin_client.table("profiles").select("*").execute()
 
         school_1_users = [
             u for u in response.data
@@ -428,7 +428,7 @@ class TestUserProfilesRLS:
         # Check if there's cross-tenant visibility
         # This may or may not be a vulnerability depending on requirements
         total_users = len(response.data)
-        print(f"user_profiles: {total_users} total users visible")
+        print(f"profiles: {total_users} total users visible")
 
 
 class TestRLSPolicyExistence:
@@ -441,7 +441,7 @@ class TestRLSPolicyExistence:
 
     @pytest.mark.parametrize("table_name", [
         "schools",
-        "user_profiles",
+        "profiles",
         "events",
         "crm_events",
         "extracted_data",
