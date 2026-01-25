@@ -48,6 +48,10 @@ class SchoolSelection(BaseModel):
     type: Literal["existing", "new"]
     school_id: Optional[str] = None  # Required if type is "existing"
     school_name: Optional[str] = None  # Required if type is "new"
+    is_self_admin: bool = False  # True if recruiter IS the admin (no invite needed)
+    admin_email: Optional[EmailStr] = None  # Required if is_self_admin=False for new schools
+    admin_first_name: Optional[str] = None  # Optional admin first name
+    admin_last_name: Optional[str] = None  # Optional admin last name
 
 
 class RecruiterSignupRequest(BaseModel):

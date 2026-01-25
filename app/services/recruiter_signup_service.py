@@ -80,6 +80,15 @@ class RecruiterSignupService:
                 detail="Email already registered. Please login instead."
             )
 
+        # 2.5. Validate admin email for new schools (only if not claiming to be admin)
+        if request.school_selection.type == "new":
+            if not request.school_selection.is_self_admin:
+                if not request.school_selection.admin_email:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Admin email is required for new schools"
+                    )
+
         # 3. Handle school selection
         school_id, parent_school_id, is_standalone = self._handle_school_selection(
             request.school_selection
@@ -104,6 +113,26 @@ class RecruiterSignupService:
             parent_school_id=parent_school_id,
             is_standalone=is_standalone
         )
+
+        # 5.5. Invite admin if this is a new school and recruiter is not the admin
+        should_invite_admin = (
+            request.school_selection.type == "new" and
+            not request.school_selection.is_self_admin and
+            request.school_selection.admin_email and
+            request.school_selection.admin_email.lower() != request.email.lower()
+        )
+
+        if should_invite_admin:
+            self._invite_school_admin(
+                school_id=school_id,
+                admin_email=request.school_selection.admin_email,
+                admin_first_name=request.school_selection.admin_first_name,
+                admin_last_name=request.school_selection.admin_last_name,
+                inviter_user_id=user_id,
+                recruiter_name=f"{request.first_name} {request.last_name}",
+                school_name=request.school_selection.school_name,
+                events=events
+            )
 
         # 6. Create Stripe checkout session with line item per event
         frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -281,9 +310,9 @@ class RecruiterSignupService:
         is_standalone: bool
     ) -> Dict[str, Any]:
         """Create or update user profile with appropriate role."""
-        # If user created a new school (not standalone), they're the admin
+        # If user created a new school (not standalone), they're the admin with full privileges
         # If they selected an existing school (standalone), they're a recruiter pending approval
-        user_role = ["recruiter"] if is_standalone else ["admin"]
+        user_role = ["recruiter", "reviewer"] if is_standalone else ["admin", "recruiter", "reviewer"]
 
         profile_data = {
             "id": user_id,
@@ -352,6 +381,61 @@ class RecruiterSignupService:
                 status_code=500,
                 detail=f"Failed to sign in user: {str(e)}"
             )
+
+    def _invite_school_admin(
+        self,
+        school_id: str,
+        admin_email: str,
+        admin_first_name: Optional[str],
+        admin_last_name: Optional[str],
+        inviter_user_id: str,
+        recruiter_name: str,
+        school_name: str,
+        events: List[Dict[str, Any]]
+    ) -> None:
+        """Invite the school admin with custom email and track for auto-demotion."""
+        from app.repositories.auth_repository import create_magic_link_db, get_frontend_url
+        from app.services.notification_service import NotificationService
+
+        try:
+            # Create magic link for the admin invite
+            metadata = {
+                "first_name": admin_first_name or "Admin",
+                "last_name": admin_last_name or "",
+                "role": ["admin"],
+                "school_id": school_id,
+                "email_verified": False
+            }
+            token = create_magic_link_db(self.supabase, admin_email, "invite", metadata)
+
+            # Build magic link URL
+            frontend_url = get_frontend_url()
+            magic_url = f"{frontend_url}/magic-link?token={token}&type=invite"
+
+            # Send custom admin invite email using NotificationService
+            notification_service = NotificationService()
+            notification_service.send_admin_invite_email(
+                admin_email=admin_email,
+                admin_first_name=admin_first_name,
+                recruiter_name=recruiter_name,
+                school_name=school_name,
+                events=events,
+                magic_link_url=magic_url
+            )
+
+            # Store the inviter relationship for auto-demotion when admin accepts
+            self.supabase.table("admin_invites").insert({
+                "school_id": school_id,
+                "inviter_user_id": inviter_user_id,
+                "invited_admin_email": admin_email.lower(),
+                "status": "pending"
+            }).execute()
+
+            print(f"✅ Admin invite sent to {admin_email} for school {school_id}")
+
+        except Exception as e:
+            # Log but don't fail the signup if invite fails
+            print(f"⚠️ Failed to send admin invite (non-fatal): {str(e)}")
 
 
 async def get_public_schools(

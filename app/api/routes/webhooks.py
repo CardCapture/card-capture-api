@@ -71,11 +71,12 @@ async def send_post_purchase_emails(
         )
         log_debug(f"Receipt email result: {receipt_result}", service="webhook")
 
-        # 2. Send invite admins email only for NEW users who created a new school (not standalone)
+        # 2. Send follow-up email for NEW users who created a new school (not standalone)
         # Skip for admin_event_purchase since they already have an account
         if is_new_user and account_status != "standalone" and school_id:
             # Brief delay to respect Resend's 2 req/sec rate limit
             await asyncio.sleep(0.5)
+
             # Get school name
             school_response = (
                 supabase.table("schools")
@@ -86,12 +87,34 @@ async def send_post_purchase_emails(
             )
             school_name = school_response.data.get("name", "Your School") if school_response.data else "Your School"
 
-            invite_result = notification_service.send_invite_admins_email(
-                recipient_email=recipient_email,
-                recipient_name=recipient_name,
-                school_name=school_name
+            # Check if an admin was already invited during signup
+            admin_invite_response = (
+                supabase.table("admin_invites")
+                .select("invited_admin_email")
+                .eq("school_id", school_id)
+                .eq("status", "pending")
+                .limit(1)
+                .execute()
             )
-            log_debug(f"Invite admins email result: {invite_result}", service="webhook")
+
+            if admin_invite_response.data:
+                # Admin was invited during signup - send confirmation email
+                invited_admin_email = admin_invite_response.data[0].get("invited_admin_email", "your administrator")
+                invite_result = notification_service.send_welcome_admin_invited_email(
+                    recipient_email=recipient_email,
+                    recipient_name=recipient_name,
+                    school_name=school_name,
+                    admin_email=invited_admin_email
+                )
+                log_debug(f"Welcome (admin invited) email result: {invite_result}", service="webhook")
+            else:
+                # No admin invited - they are the admin, encourage them to invite team
+                invite_result = notification_service.send_invite_admins_email(
+                    recipient_email=recipient_email,
+                    recipient_name=recipient_name,
+                    school_name=school_name
+                )
+                log_debug(f"Invite admins email result: {invite_result}", service="webhook")
 
     except Exception as e:
         # Don't fail the webhook if emails fail

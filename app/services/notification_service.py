@@ -1022,6 +1022,112 @@ class NotificationService:
         </html>
         """
 
+    def send_welcome_admin_invited_email(
+        self,
+        recipient_email: str,
+        recipient_name: str,
+        school_name: str,
+        admin_email: str
+    ) -> bool:
+        """
+        Send welcome email to recruiter when they've already invited an admin during signup.
+        Different from send_invite_admins_email - this confirms the admin has been invited.
+        """
+        if not self.resend_api_key:
+            log_debug("Resend API key not configured, skipping welcome email", service="notifications")
+            return False
+
+        try:
+            html_content = self._build_welcome_admin_invited_email(
+                recipient_name=recipient_name,
+                school_name=school_name,
+                admin_email=admin_email
+            )
+
+            params = {
+                "from": "CardCapture <no-reply@cardcapture.io>",
+                "to": [recipient_email],
+                "subject": f"Welcome to CardCapture - {school_name}",
+                "html": html_content
+            }
+
+            response = resend.Emails.send(params)
+            log_debug(
+                f"Welcome (admin invited) email sent to {recipient_email}. Response ID: {response.get('id', 'unknown')}",
+                service="notifications"
+            )
+            return True
+
+        except Exception as e:
+            log_debug(f"Failed to send welcome email: {str(e)}", service="notifications")
+            return False
+
+    def _build_welcome_admin_invited_email(
+        self,
+        recipient_name: str,
+        school_name: str,
+        admin_email: str
+    ) -> str:
+        """Build HTML welcome email for recruiter who invited an admin during signup."""
+        logo_url = "https://assets.cardcapture.io/storage/v1/object/public/assets/cc-logo-transparent-min.png"
+        current_year = datetime.now().year
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+            <div style="background-color: white; border-radius: 8px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <div style="text-align: center; margin-bottom: 8px;">
+                    <img src="{logo_url}" alt="CardCapture" style="max-width: 180px; height: auto;">
+                </div>
+
+                <h2 style="color: #1f2937; margin-bottom: 16px; text-align: center;">Welcome to CardCapture!</h2>
+
+                <p style="color: #4b5563; line-height: 1.6;">Hi {self._get_first_name(recipient_name)},</p>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    Your account for <strong>{school_name}</strong> has been created and you're ready to start scanning inquiry cards!
+                </p>
+
+                <div style="background-color: #d1fae5; border-radius: 8px; padding: 16px; margin: 24px 0; border-left: 4px solid #059669;">
+                    <p style="color: #065f46; margin: 0; font-weight: 600;">
+                        Admin invite sent
+                    </p>
+                    <p style="color: #065f46; margin: 8px 0 0 0; font-size: 14px;">
+                        We've sent an invite to <strong>{admin_email}</strong> to become the administrator for your school's account.
+                    </p>
+                </div>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    Once they accept, they'll be able to manage the account, view all scanned cards, and add additional team members.
+                </p>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    In the meantime, you have full access to scan cards at your upcoming events.
+                </p>
+
+                <div style="text-align: center; margin: 32px 0;">
+                    <a href="{self.frontend_url}"
+                       style="background-color: #3b82f6; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
+                        Go to Dashboard
+                    </a>
+                </div>
+
+                <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
+
+                <p style="color: #9ca3af; font-size: 12px; text-align: center;">
+                    Questions? Reply to this email or contact support@cardcapture.io<br>
+                    &copy; {current_year} CardCapture. All rights reserved.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+
     def _build_invite_admins_email(
         self,
         recipient_name: str,
@@ -1187,6 +1293,160 @@ class NotificationService:
                 <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
 
                 <p style="color: #9ca3af; font-size: 12px; text-align: center;">
+                    Questions? Contact support@cardcapture.io<br>
+                    &copy; {current_year} CardCapture. All rights reserved.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+
+
+    # =====================================================
+    # Admin Invite Email (for recruiter signup flow)
+    # =====================================================
+
+    def send_admin_invite_email(
+        self,
+        admin_email: str,
+        admin_first_name: Optional[str],
+        recruiter_name: str,
+        school_name: str,
+        events: List[Dict[str, Any]],
+        magic_link_url: str
+    ) -> bool:
+        """
+        Send invite email to admin when a recruiter signs up and lists them as the administrator.
+
+        Args:
+            admin_email: Admin's email address
+            admin_first_name: Admin's first name (optional)
+            recruiter_name: Full name of the recruiter who signed up
+            school_name: Name of the school being created
+            events: List of events the recruiter purchased
+            magic_link_url: URL for admin to accept the invite
+        """
+        if not self.resend_api_key:
+            log_debug("Resend API key not configured, skipping admin invite email", service="notifications")
+            return False
+
+        try:
+            html_content = self._build_admin_invite_email(
+                admin_first_name=admin_first_name,
+                recruiter_name=recruiter_name,
+                school_name=school_name,
+                events=events,
+                magic_link_url=magic_link_url
+            )
+
+            # Build subject line
+            if len(events) == 1:
+                event_name = events[0].get("name", "an upcoming event")
+                subject = f"{recruiter_name} signed up for CardCapture - {event_name}"
+            else:
+                subject = f"{recruiter_name} signed up for CardCapture - {len(events)} events"
+
+            params = {
+                "from": "CardCapture <no-reply@cardcapture.io>",
+                "to": [admin_email],
+                "subject": subject,
+                "html": html_content
+            }
+
+            response = resend.Emails.send(params)
+            log_debug(
+                f"Admin invite email sent to {admin_email}. Response ID: {response.get('id', 'unknown')}",
+                service="notifications"
+            )
+            return True
+
+        except Exception as e:
+            log_debug(f"Failed to send admin invite email: {str(e)}", service="notifications")
+            return False
+
+    def _build_admin_invite_email(
+        self,
+        admin_first_name: Optional[str],
+        recruiter_name: str,
+        school_name: str,
+        events: List[Dict[str, Any]],
+        magic_link_url: str
+    ) -> str:
+        """Build HTML email for admin invite from recruiter signup."""
+        logo_url = "https://assets.cardcapture.io/storage/v1/object/public/assets/cc-logo-transparent-min.png"
+        current_year = datetime.now().year
+        admin_name = admin_first_name or "there"
+
+        # Build events list
+        event_count = len(events)
+        if event_count == 1:
+            event = events[0]
+            event_name = event.get("name", "an upcoming event")
+            event_date = event.get("event_date", "")
+            events_html = f'<strong>{event_name}</strong>'
+            if event_date:
+                events_html += f' on {event_date}'
+        else:
+            events_html = "<ul style='margin: 8px 0; padding-left: 20px;'>"
+            for event in events:
+                event_name = event.get("name", "Event")
+                event_date = event.get("event_date", "")
+                date_str = f" ({event_date})" if event_date else ""
+                events_html += f"<li><strong>{event_name}</strong>{date_str}</li>"
+            events_html += "</ul>"
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+            <div style="background-color: white; border-radius: 8px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <div style="text-align: center; margin-bottom: 24px;">
+                    <img src="{logo_url}" alt="CardCapture" style="max-width: 180px; height: auto;">
+                </div>
+
+                <h2 style="color: #1f2937; margin-bottom: 16px;">You've Been Invited to CardCapture</h2>
+
+                <p style="color: #4b5563; line-height: 1.6;">Hi {admin_name},</p>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    <strong>{recruiter_name}</strong> signed up for CardCapture and listed you as the administrator for <strong>{school_name}</strong>.
+                </p>
+
+                <div style="background-color: #f0f9ff; border-radius: 8px; padding: 20px; margin: 24px 0; border-left: 4px solid #2563eb;">
+                    <p style="color: #1e40af; margin: 0 0 8px 0; font-weight: 600;">Event{"s" if event_count > 1 else ""} purchased:</p>
+                    <p style="color: #1e40af; margin: 0;">
+                        {events_html}
+                    </p>
+                </div>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    Accept this invite to become the admin and see all inquiry card scans from {"this event" if event_count == 1 else "these events"}.
+                </p>
+
+                <div style="text-align: center; margin: 32px 0;">
+                    <a href="{magic_link_url}"
+                       style="background-color: #2563eb; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
+                        Accept Invite
+                    </a>
+                </div>
+
+                <p style="color: #6b7280; font-size: 14px; line-height: 1.6;">
+                    When you accept, you'll become the administrator for {school_name} on CardCapture. You'll be able to:
+                </p>
+                <ul style="color: #6b7280; font-size: 14px; line-height: 1.8; padding-left: 20px;">
+                    <li>View and export all scanned inquiry cards</li>
+                    <li>Manage team members and permissions</li>
+                    <li>Purchase additional events</li>
+                </ul>
+
+                <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
+
+                <p style="color: #9ca3af; font-size: 12px; text-align: center;">
+                    If you weren't expecting this invite, you can safely ignore this email.<br>
                     Questions? Contact support@cardcapture.io<br>
                     &copy; {current_year} CardCapture. All rights reserved.
                 </p>

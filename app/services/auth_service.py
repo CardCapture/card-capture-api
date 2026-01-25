@@ -268,13 +268,42 @@ async def create_user_service(payload: dict):
                 "role": role,
                 "school_id": school_id
             }
-            
+
             get_supabase_client().table("profiles").upsert(profile_data).execute()
             log_debug(f"Profile created/updated for: {email}", service="auth")
         except Exception as profile_error:
             log_debug(f"Profile creation error (non-fatal): {str(profile_error)}", service="auth")
             # Don't fail the whole process for profile errors
-        
+
+        # Auto-demote the original recruiter if this is an admin accepting an invite
+        if "admin" in role and school_id:
+            try:
+                supabase_client = get_supabase_client()
+
+                # Find pending invite for this email and school
+                invite_response = supabase_client.table("admin_invites").select("*").eq(
+                    "invited_admin_email", email.lower()
+                ).eq("school_id", school_id).eq("status", "pending").execute()
+
+                if invite_response.data:
+                    invite = invite_response.data[0]
+                    inviter_user_id = invite["inviter_user_id"]
+
+                    # Demote the original recruiter from admin
+                    supabase_client.table("profiles").update({
+                        "role": ["recruiter", "reviewer"]
+                    }).eq("id", inviter_user_id).execute()
+
+                    # Mark invite as completed
+                    supabase_client.table("admin_invites").update({
+                        "status": "completed",
+                        "completed_at": "now()"
+                    }).eq("id", invite["id"]).execute()
+
+                    log_debug(f"Auto-demoted user {inviter_user_id} after admin {email} accepted invite", service="auth")
+            except Exception as demote_error:
+                log_debug(f"Auto-demotion error (non-fatal): {str(demote_error)}", service="auth")
+
         action = "updated" if existing_user else "created"
         log_debug(f"User account {action} successfully for: {email}", service="auth")
         return {
