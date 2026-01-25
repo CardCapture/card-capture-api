@@ -30,6 +30,19 @@ class UniversalEventSubmissionRequest(BaseModel):
     needs_inquiry_cards: Optional[bool] = False
     expected_students: Optional[int] = None
 
+    # Secondary contact (optional)
+    contact_name_secondary: Optional[str] = None
+    contact_email_secondary: Optional[EmailStr] = None
+    contact_phone_secondary: Optional[str] = None
+
+    # Inquiry cards mailing address (when needs_inquiry_cards is True)
+    inquiry_cards_same_as_event_address: Optional[bool] = True
+    inquiry_cards_address: Optional[str] = None
+    inquiry_cards_city: Optional[str] = None
+    inquiry_cards_state: Optional[str] = None
+    inquiry_cards_zip: Optional[str] = None
+    inquiry_cards_attention: Optional[str] = None
+
     @field_validator("name")
     @classmethod
     def name_not_empty(cls, v: str) -> str:
@@ -82,6 +95,34 @@ class UniversalEventSubmissionRequest(BaseModel):
         if v > 50000:
             raise ValueError("Expected students seems unreasonably high")
         return v
+
+    @field_validator("contact_phone_secondary")
+    @classmethod
+    def validate_secondary_phone(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        # Remove all non-digit characters for storage
+        digits = re.sub(r"\D", "", v)
+        if len(digits) < 10:
+            raise ValueError("Secondary phone must have at least 10 digits")
+        return digits
+
+    @field_validator("inquiry_cards_zip")
+    @classmethod
+    def validate_inquiry_cards_zip(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        digits = re.sub(r"\D", "", v)
+        if len(digits) not in (5, 9):
+            raise ValueError("Mailing ZIP code must be 5 or 9 digits")
+        return digits[:5]
+
+    @field_validator("inquiry_cards_state")
+    @classmethod
+    def validate_inquiry_cards_state(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        return v.upper()[:2]
 
 
 class UniversalEventSubmissionResponse(BaseModel):

@@ -320,7 +320,18 @@ async def submit_universal_event(request: UniversalEventSubmissionRequest) -> Di
             "description": request.description,
             "needs_inquiry_cards": request.needs_inquiry_cards or False,
             "expected_students": request.expected_students,
-            "status": "active"
+            "status": "active",
+            # Secondary contact
+            "contact_name_secondary": request.contact_name_secondary,
+            "contact_email_secondary": request.contact_email_secondary,
+            "contact_phone_secondary": request.contact_phone_secondary,
+            # Inquiry cards mailing address
+            "inquiry_cards_same_as_event_address": request.inquiry_cards_same_as_event_address if request.needs_inquiry_cards else None,
+            "inquiry_cards_address": request.inquiry_cards_address if request.needs_inquiry_cards else None,
+            "inquiry_cards_city": request.inquiry_cards_city if request.needs_inquiry_cards else None,
+            "inquiry_cards_state": request.inquiry_cards_state if request.needs_inquiry_cards else None,
+            "inquiry_cards_zip": request.inquiry_cards_zip if request.needs_inquiry_cards else None,
+            "inquiry_cards_attention": request.inquiry_cards_attention if request.needs_inquiry_cards else None,
         }
 
         # Create event
