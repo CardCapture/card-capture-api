@@ -90,3 +90,6 @@ smart_address_test_results.json
 trim_image_test/
 
 *.sql
+
+# Claude Code context files - never commit
+**/CLAUDE.md
