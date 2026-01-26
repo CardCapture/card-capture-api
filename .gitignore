@@ -90,6 +90,8 @@ smart_address_test_results.json
 trim_image_test/
 
 *.sql
+# Exception: Track database migrations
+!app/db/migrations/*.sql
 
 # Claude Code context files - never commit
 **/CLAUDE.md
