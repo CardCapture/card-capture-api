@@ -92,6 +92,7 @@ trim_image_test/
 *.sql
 # Exception: Track database migrations
 !app/db/migrations/*.sql
+!supabase/migrations/*.sql
 
 # Claude Code context files - never commit
 **/CLAUDE.md
