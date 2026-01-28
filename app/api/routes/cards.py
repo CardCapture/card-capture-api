@@ -3,26 +3,29 @@ from fastapi.responses import JSONResponse
 from app.core.auth import get_current_user
 from typing import Dict, Any, List, Union
 from datetime import datetime, timezone
-import traceback
 import uuid
 
-from app.models.card import BulkActionPayload, MarkExportedPayload
+from app.models.card import BulkActionPayload
 from app.services.cards_service import (
     mark_as_exported_service,
     archive_cards_service,
     delete_cards_service,
     move_cards_service,
-    save_manual_review_service,
     get_cards_service
 )
 from app.core.clients import get_supabase_client
 from app.repositories.reviewed_data_repository import upsert_reviewed_data
-# Removed import: canonicalize_fields - no longer using canonicalization
 from app.utils.field_utils import filter_combined_fields
 from app.utils.retry_utils import log_debug
 from app.models.address_suggestions import AddressSuggestionsRequest, AddressSuggestionsResponse
 from app.services.address_suggestions_service import get_address_suggestions
 from app.services.address_validation_service import validate_address_realtime
+from app.utils.authorization import (
+    is_superadmin,
+    verify_event_belongs_to_user_school,
+    verify_document_belongs_to_user_school,
+    verify_documents_belong_to_user_school,
+)
 
 router = APIRouter()
 
@@ -31,62 +34,86 @@ REQUIRED_FIELDS = ["address", "cell", "city", "state", "zip_code", "name", "emai
 
 @router.get("/cards", response_model=List[Dict[str, Any]])
 async def get_cards(event_id: Union[str, None] = None, user=Depends(get_current_user)):
-    return await get_cards_service(event_id)
+    """Get cards with multi-tenant isolation."""
+    # If event_id provided, verify user can access that event
+    if event_id:
+        await verify_event_belongs_to_user_school(event_id, user)
+
+    # Get user's school_id for filtering (None for SuperAdmins)
+    school_id = user.get("school_id") if not is_superadmin(user) else None
+
+    return await get_cards_service(event_id, school_id)
 
 @router.post("/archive-cards")
 async def archive_cards(payload: BulkActionPayload, user=Depends(get_current_user)):
     """
-    Archive cards - standardized endpoint
+    Archive cards - standardized endpoint with multi-tenant isolation.
     """
     log_debug(f"Archive cards - document_ids: {payload.document_ids}", service="cards")
-    
+
     if not payload.document_ids:
         return JSONResponse(status_code=400, content={"error": "No document_ids provided"})
-    
+
+    # Verify ALL documents belong to user's school before archiving
+    await verify_documents_belong_to_user_school(payload.document_ids, user)
+
     return await archive_cards_service(payload.document_ids)
 
 @router.post("/mark-exported")
 async def mark_as_exported(payload: BulkActionPayload, user=Depends(get_current_user)):
     """
-    Mark cards as exported - standardized endpoint
+    Mark cards as exported - standardized endpoint with multi-tenant isolation.
     """
     log_debug(f"Mark as exported - document_ids: {payload.document_ids}", service="cards")
-    
+
     if not payload.document_ids:
         return JSONResponse(status_code=400, content={"error": "No document_ids provided"})
-    
+
+    # Verify ALL documents belong to user's school
+    await verify_documents_belong_to_user_school(payload.document_ids, user)
+
     return await mark_as_exported_service(payload.document_ids)
 
 @router.post("/delete-cards")
 async def delete_cards(payload: BulkActionPayload, user=Depends(get_current_user)):
     """
-    Delete cards - standardized endpoint
+    Delete cards - standardized endpoint with multi-tenant isolation.
     """
     log_debug(f"Delete cards - document_ids: {payload.document_ids}", service="cards")
-    
+
     if not payload.document_ids:
         return JSONResponse(status_code=400, content={"error": "No document_ids provided"})
-    
+
+    # Verify ALL documents belong to user's school before deleting
+    await verify_documents_belong_to_user_school(payload.document_ids, user)
+
     return delete_cards_service(payload.document_ids)
 
 @router.post("/move-cards")
 async def move_cards(payload: BulkActionPayload, user=Depends(get_current_user)):
     """
-    Move cards - standardized endpoint
+    Move cards - standardized endpoint with multi-tenant isolation.
     """
     log_debug(f"Move cards - document_ids: {payload.document_ids}, status: {payload.status}", service="cards")
-    
+
     if not payload.document_ids:
         return JSONResponse(status_code=400, content={"error": "No document_ids provided"})
-    
+
+    # Verify ALL documents belong to user's school before moving
+    await verify_documents_belong_to_user_school(payload.document_ids, user)
+
     status = payload.status or "reviewed"
     return move_cards_service(payload.document_ids, status)
 
 @router.post("/save-review/{document_id}")
 async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
     """
-    Save manual review changes for a card (supports both V1 and V2)
+    Save manual review changes for a card (supports both V1 and V2).
+    Includes multi-tenant isolation check.
     """
+    # Verify document belongs to user's school before allowing review
+    await verify_document_belongs_to_user_school(document_id, user)
+
     try:
         # Get current card data - try V1 first, then V2
         supabase_client = get_supabase_client()
@@ -137,7 +164,7 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
                 # A field needs review if it's marked as requiring review AND hasn't been manually reviewed
                 requires_review = field_data.get("requires_human_review", True)
                 is_manually_reviewed = field_data.get("reviewed", False)
-                
+
                 # If a field requires review but hasn't been manually marked as reviewed, it still needs review
                 if requires_review and not is_manually_reviewed:
                     log_debug(f"Field {field_name} needs review (requires_human_review: {requires_review}, manually_reviewed: {is_manually_reviewed})", service="cards")
@@ -178,6 +205,8 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
             response = upsert_reviewed_data(supabase_client, update_data)
             return response.data[0] if response.data else None
 
+    except HTTPException:
+        raise
     except Exception as e:
         log_debug(f"Error saving review: {str(e)}", service="cards")
         raise HTTPException(status_code=500, detail=str(e))
@@ -187,12 +216,12 @@ async def save_manual_review(document_id: str, payload: Dict[str, Any] = Body(..
 async def get_address_suggestions_endpoint(payload: AddressSuggestionsRequest, user=Depends(get_current_user)):
     """
     Get real-time address suggestions for review modal
-    
+
     Provides multiple ranked suggestions based on:
     - Google Maps validation
-    - ZIP code validation  
+    - ZIP code validation
     - Smart address correction
-    
+
     Used by frontend to show smart preview suggestions when user edits address fields.
     """
     try:
@@ -213,13 +242,13 @@ async def get_address_suggestions_endpoint(payload: AddressSuggestionsRequest, u
 async def validate_address_endpoint(payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
     """
     New consolidated address validation endpoint
-    
+
     Handles the 4-state validation system:
     - verified: Google Maps confirmed exact match
-    - can_be_verified: Google Maps found suggestion but not exact match  
+    - can_be_verified: Google Maps found suggestion but not exact match
     - no_house_number: Address missing house number
     - not_verified: Could not validate address
-    
+
     Used by the new simplified frontend validation flow.
     """
     try:
@@ -227,17 +256,17 @@ async def validate_address_endpoint(payload: Dict[str, Any] = Body(...), user=De
         city = payload.get("city", "")
         state = payload.get("state", "")
         zip_code = payload.get("zip_code", "")
-        
+
         log_debug("Address validation endpoint called", {
             "address": address,
             "city": city,
             "state": state,
             "zip_code": zip_code
         }, service="cards_api")
-        
+
         result = validate_address_realtime(address, city, state, zip_code)
         return JSONResponse(status_code=200, content=result)
-        
+
     except Exception as e:
         log_debug(f"Address validation endpoint failed: {str(e)}", service="cards_api")
         return JSONResponse(
@@ -257,7 +286,8 @@ async def validate_address_endpoint(payload: Dict[str, Any] = Body(...), user=De
 @router.post("/mark-field-reviewed/{document_id}")
 async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
     """
-    Mark specific fields as manually reviewed (supports both V1 and V2)
+    Mark specific fields as manually reviewed (supports both V1 and V2).
+    Includes multi-tenant isolation check.
 
     Payload should contain:
     {
@@ -269,6 +299,9 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
     This allows users to mark problematic fields (like unverifiable addresses)
     as reviewed so the card can move to 'ready for export' state.
     """
+    # Verify document belongs to user's school before allowing field review
+    await verify_document_belongs_to_user_school(document_id, user)
+
     try:
         field_name = payload.get("field_name")
         reviewed = payload.get("reviewed", True)
@@ -289,21 +322,21 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
 
         if not current_card or not current_card.data:
             raise HTTPException(status_code=404, detail="Card not found")
-        
+
         current_fields_data = current_card.data.get("fields", {})
-        
+
         # Update the specific field
         if field_name in current_fields_data:
             current_fields_data[field_name]["reviewed"] = reviewed
             current_fields_data[field_name]["review_notes"] = review_notes
             current_fields_data[field_name]["source"] = "human_review"
-            
+
             # If marking as reviewed, also set requires_human_review to False
             if reviewed:
                 current_fields_data[field_name]["requires_human_review"] = False
         else:
             return JSONResponse(status_code=404, content={"error": f"Field '{field_name}' not found"})
-        
+
         # Check if any required fields still need review after this update
         any_required_field_needs_review = False
         for req_field_name in REQUIRED_FIELDS:
@@ -311,14 +344,14 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
             if isinstance(field_data, dict):
                 requires_review = field_data.get("requires_human_review", True)
                 is_manually_reviewed = field_data.get("reviewed", False)
-                
+
                 if requires_review and not is_manually_reviewed:
                     any_required_field_needs_review = True
                     break
-        
+
         # Update review status
         review_status = "needs_review" if any_required_field_needs_review else "reviewed"
-        
+
         # Filter out combined fields before saving
         filtered_fields = filter_combined_fields(current_fields_data)
 
@@ -355,7 +388,9 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
             "card_status": review_status,
             "data": response.data[0] if response.data else None
         })
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         log_debug(f"Error marking field as reviewed: {str(e)}", service="cards")
         raise HTTPException(status_code=500, detail=str(e))
@@ -364,15 +399,49 @@ async def mark_field_reviewed(document_id: str, payload: Dict[str, Any] = Body(.
 async def manual_entry(payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
     """
     Create a new manual entry in reviewed_data with review_status='reviewed' and no image.
-    Expects: { event_id, school_id, fields: { ... } }
+    Includes multi-tenant isolation:
+    - Regular users: Uses user's school_id (ignores payload school_id)
+    - SuperAdmin: Requires school_id in payload
+
+    Expects: { event_id, school_id (required for SuperAdmin), fields: { ... } }
     """
     try:
         supabase_client = get_supabase_client()
         event_id = payload.get("event_id")
-        school_id = payload.get("school_id")
         fields = payload.get("fields", {})
-        if not event_id or not school_id or not fields:
-            return JSONResponse(status_code=400, content={"error": "event_id, school_id, and fields are required."})
+
+        # Determine school_id based on user type
+        if is_superadmin(user):
+            # SuperAdmin must provide school_id in payload
+            school_id = payload.get("school_id")
+            if not school_id:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "school_id is required for SuperAdmin users"}
+                )
+        else:
+            # Regular users: use their school_id, ignore payload
+            school_id = user.get("school_id")
+            if not school_id:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "User has no school association"}
+                )
+
+        if not event_id or not fields:
+            return JSONResponse(status_code=400, content={"error": "event_id and fields are required."})
+
+        # Verify event belongs to the school being used
+        await verify_event_belongs_to_user_school(event_id, user)
+
+        # Additional check: verify event belongs to the target school_id
+        # (handles case where SuperAdmin provides mismatched school_id and event_id)
+        event_check = supabase_client.table("events").select("school_id").eq("id", event_id).maybe_single().execute()
+        if event_check.data and str(event_check.data.get("school_id")) != str(school_id):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Event does not belong to the specified school"}
+            )
 
         # Generate a new document_id
         document_id = str(uuid.uuid4())
@@ -407,6 +476,8 @@ async def manual_entry(payload: Dict[str, Any] = Body(...), user=Depends(get_cur
             return JSONResponse(status_code=200, content={"message": "Manual entry created", "document_id": document_id, "record": response.data[0]})
         else:
             return JSONResponse(status_code=500, content={"error": "Failed to insert manual entry."})
+    except HTTPException:
+        raise
     except Exception as e:
         log_debug(f"Error creating manual entry: {e}", service="cards")
-        return JSONResponse(status_code=500, content={"error": "Failed to create manual entry"}) 
+        return JSONResponse(status_code=500, content={"error": "Failed to create manual entry"})
