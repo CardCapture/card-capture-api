@@ -22,7 +22,7 @@ def has_role(user, role_name):
 
 def can_create_events(user):
     """Check if user can create events (admin or recruiter)"""
-    user_roles = user.get("role", [])
+    user_roles = user.get("role") or []
     return any(role in user_roles for role in ["admin", "recruiter"])
 
 def can_archive_events(user):
@@ -30,36 +30,76 @@ def can_archive_events(user):
     user_roles = user.get("role", [])
     return any(role in user_roles for role in ["admin", "recruiter"])
 
-async def create_event_service(payload):
+async def create_event_service(payload, user):
+    """Create an event for the authenticated user's school.
+
+    SECURITY:
+    - Requires authentication (enforced at route level)
+    - Only admins and recruiters can create events
+    - Regular users: school_id is taken from their authenticated profile (payload ignored)
+    - SuperAdmins (school_id=NULL): school_id is taken from payload (required)
+
+    Args:
+        payload: EventCreatePayload with name, date, school_id, slate_event_id
+        user: Authenticated user profile from get_current_user
+
+    Returns:
+        JSONResponse with created event data or error
+
+    Raises:
+        HTTPException 403: If user lacks permission or school association
+        HTTPException 400: If SuperAdmin doesn't provide school_id
+    """
+    # SECURITY: Verify user has permission to create events
+    if not can_create_events(user):
+        log_debug(f"SECURITY: User {user.get('id')} denied event creation - insufficient role", service="events")
+        raise HTTPException(status_code=403, detail="Only admins and recruiters can create events")
+
+    # SECURITY: Determine school_id based on user type
+    user_school_id = user.get("school_id")
+
+    if user_school_id:
+        # Regular user - MUST use their own school_id (ignore payload)
+        target_school_id = user_school_id
+        if payload.school_id and payload.school_id != user_school_id:
+            log_debug(
+                f"SECURITY: Regular user {user.get('id')} payload school_id={payload.school_id} ignored, using {user_school_id}",
+                service="events"
+            )
+    else:
+        # SuperAdmin (school_id=NULL) - use payload school_id (required)
+        if not payload.school_id:
+            log_debug(f"SECURITY: SuperAdmin {user.get('id')} missing school_id in payload", service="events")
+            raise HTTPException(status_code=400, detail="school_id is required for SuperAdmin event creation")
+        target_school_id = payload.school_id
+        log_debug(f"SuperAdmin {user.get('id')} creating event for school {target_school_id}", service="events")
+
     try:
         supabase_client = get_supabase_client()
     except Exception as e:
         log_debug(f"Database client not available: {e}", service="events")
         return JSONResponse(status_code=503, content={"error": "Database client not available."})
+
     try:
-        # Debug logging
-        log_debug(f"CREATE EVENT DEBUG - Received payload: {payload}", service="events")
-        log_debug(f"CREATE EVENT DEBUG - slate_event_id from payload: {payload.slate_event_id}", service="events")
-        
         event_data = {
             "name": payload.name,
             "date": payload.date,
-            "school_id": payload.school_id,
+            "school_id": target_school_id,  # SECURITY: Uses validated school_id
             "status": "active",
             "slate_event_id": payload.slate_event_id
         }
-        
-        log_debug(f"CREATE EVENT DEBUG - Event data being sent to DB: {event_data}", service="events")
-        
+
+        log_debug(f"Creating event: {event_data}", service="events")
+
         response = insert_event_db(supabase_client, event_data)
-        
-        log_debug(f"CREATE EVENT DEBUG - DB response: {response}", service="events")
-        
+
         if not response.data:
             log_debug("Failed to create event", service="events")
             return JSONResponse(status_code=500, content={"error": "Failed to create event."})
+
         log_debug(f"Event created: {response.data[0]}", service="events")
         return JSONResponse(status_code=200, content=response.data[0])
+
     except Exception as e:
         log_debug(f"Error creating event: {e}", service="events")
         import traceback; traceback.print_exc()
