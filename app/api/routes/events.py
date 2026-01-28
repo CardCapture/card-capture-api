@@ -17,6 +17,7 @@ from app.core.clients import get_supabase_client
 from app.repositories.universal_events_repository import UniversalEventsRepository
 from app.repositories.event_purchases_repository import EventPurchasesRepository
 from app.utils.retry_utils import log_debug
+from app.utils.authorization import verify_event_belongs_to_user_school
 
 router = APIRouter(tags=["Events"])
 
@@ -350,7 +351,17 @@ async def update_event(event_id: str, payload: EventUpdatePayload, user=Depends(
     return await update_event_controller(event_id, payload, user)
 
 @router.post("/archive-events")
-async def archive_events(payload: ArchiveEventsPayload):
+async def archive_events(payload: ArchiveEventsPayload, user=Depends(get_current_user)):
+    """
+    Archive multiple events.
+
+    SECURITY: Verifies ALL events belong to user's school before archiving.
+    SuperAdmins can archive events from any school.
+    """
+    # Verify ALL event_ids belong to user's school before archiving
+    for event_id in payload.event_ids:
+        await verify_event_belongs_to_user_school(event_id, user)
+
     return await archive_events_controller(payload)
 
 @router.delete("/events/{event_id}")
@@ -597,7 +608,7 @@ async def delete_event_code(
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Soft delete by deactivating
-        response = supabase_client.table("event_codes").update({"active": False}).eq("id", code_id).execute()
+        supabase_client.table("event_codes").update({"active": False}).eq("id", code_id).execute()
         
         log_debug(f"Event code deactivated: {code_id}", service="events")
         return {"success": True, "message": "Event code deactivated"}
