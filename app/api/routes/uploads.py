@@ -1,5 +1,5 @@
-from fastapi import APIRouter, File, UploadFile, BackgroundTasks, Form, Depends, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import APIRouter, File, UploadFile, BackgroundTasks, Form, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from app.controllers.uploads_controller import (
     upload_file_controller,
     check_upload_status_controller,
@@ -11,6 +11,12 @@ from app.services.signup_service import process_signup_sheet
 from app.utils.retry_utils import log_debug
 from app.utils.storage import upload_to_supabase_storage_from_path
 from app.core.clients import get_supabase_client
+from app.utils.authorization import (
+    is_superadmin,
+    verify_document_belongs_to_user_school,
+    verify_event_belongs_to_user_school,
+    verify_school_access,
+)
 import tempfile
 import os
 import uuid
@@ -24,21 +30,75 @@ async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     event_id: str = Form(None),
-    school_id: str = Form(...),
+    school_id: str = Form(None),
     user=Depends(get_current_user)
 ):
-    return await upload_file_controller(background_tasks, file, event_id, school_id, user)
+    """
+    Upload a file for processing.
+
+    SECURITY:
+    - Regular users: Always uses user's school_id (form data ignored)
+    - SuperAdmin: Must provide school_id in form data
+    - If event_id provided, verifies it belongs to the target school
+    """
+    # Determine which school_id to use
+    if is_superadmin(user):
+        # SuperAdmin must provide school_id
+        if not school_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="SuperAdmin must provide school_id"
+            )
+        effective_school_id = school_id
+    else:
+        # Regular user: ALWAYS use their school_id, ignore form data
+        effective_school_id = user.get("school_id")
+        if not effective_school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User has no school association"
+            )
+
+    # If event_id provided, verify it belongs to the target school
+    if event_id:
+        await verify_event_belongs_to_user_school(event_id, user)
+
+    return await upload_file_controller(background_tasks, file, event_id, effective_school_id, user)
 
 @router.get("/upload-status/{document_id}")
-async def check_upload_status(document_id: str):
+async def check_upload_status(document_id: str, user=Depends(get_current_user)):
+    """
+    Check the upload/processing status of a document.
+
+    SECURITY: Verifies document belongs to user's school.
+    SuperAdmins can access documents from any school.
+    """
+    await verify_document_belongs_to_user_school(document_id, user)
     return await check_upload_status_controller(document_id)
 
 @router.get("/images/{document_id}")
-async def get_image(document_id: str):
+async def get_image(document_id: str, user=Depends(get_current_user)):
+    """
+    Get the image for a document.
+
+    SECURITY: Verifies document belongs to user's school.
+    SuperAdmins can access documents from any school.
+    """
+    await verify_document_belongs_to_user_school(document_id, user)
     return await get_image_controller(document_id)
 
 @router.post("/export-to-slate")
-async def export_to_slate(payload: dict):
+async def export_to_slate(payload: dict, user=Depends(get_current_user)):
+    """
+    Export data to Slate.
+
+    SECURITY: If school_id in payload, verifies user has access.
+    SuperAdmins can export for any school.
+    """
+    # If school_id is provided in payload, verify user has access
+    if payload.get("school_id"):
+        await verify_school_access(payload["school_id"], user)
+
     return await export_to_slate_controller(payload)
 
 @router.post("/upload-signup-sheet")
