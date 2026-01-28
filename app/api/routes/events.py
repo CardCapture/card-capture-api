@@ -49,8 +49,16 @@ class EventCodeUpdateRequest(BaseModel):
     valid_until: Optional[str] = None
 
 @router.post("/events")
-async def create_event(payload: EventCreatePayload):
-    return await create_event_controller(payload)
+async def create_event(payload: EventCreatePayload, user=Depends(get_current_user)):
+    """
+    Create a new event.
+
+    SECURITY:
+    - Requires authentication
+    - Regular users: event is created for their school (payload school_id ignored)
+    - SuperAdmins: event is created for the school specified in payload
+    """
+    return await create_event_controller(payload, user)
 
 
 @router.post("/events/purchase", response_model=AdminEventPurchaseResponse)

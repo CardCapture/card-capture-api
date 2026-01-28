@@ -5,8 +5,8 @@ from app.services.events_service import (
     delete_event_service
 )
 
-async def create_event_controller(payload):
-    return await create_event_service(payload)
+async def create_event_controller(payload, user):
+    return await create_event_service(payload, user)
 
 async def update_event_controller(event_id: str, payload, user):
     return await update_event_service(event_id, payload, user)
