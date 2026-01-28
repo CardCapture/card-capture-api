@@ -177,22 +177,68 @@ async def consume_magic_link_service(token: str, link_type: str):
         raise HTTPException(status_code=500, detail="Failed to process magic link")
 
 async def create_user_service(payload: dict):
-    """Create or update user account for invite flow"""
+    """Create or update user account for invite flow.
+
+    SECURITY: This endpoint requires a valid magic_link_token from an invite.
+    All user data (email, role, school_id, name) is extracted from the validated
+    token's metadata - NOT from the request body. Only the password is accepted
+    from user input.
+
+    Args:
+        payload: Dict containing:
+            - magic_link_token (required): The invite token to validate
+            - password (required): The user's chosen password
+
+    Returns:
+        Dict with success status, user_id, email, and message
+
+    Raises:
+        HTTPException 400: If token is missing, invalid, expired, or already used
+        HTTPException 500: If user creation fails
+    """
     try:
-        email = payload.get("email")
+        # Step 1: Require magic_link_token
+        magic_link_token = payload.get("magic_link_token")
+        if not magic_link_token:
+            log_debug("SECURITY: create_user called without magic_link_token", service="auth")
+            raise HTTPException(status_code=400, detail="magic_link_token is required")
+
+        # Step 2: Validate the token
+        supabase_client = get_supabase_client()
+        log_debug(f"Validating invite token: {magic_link_token[:8]}...", service="auth")
+        magic_link = validate_magic_link_db(supabase_client, magic_link_token)
+
+        if not magic_link:
+            log_debug("SECURITY: Invalid or expired invitation token attempted", service="auth")
+            raise HTTPException(status_code=400, detail="Invalid or expired invitation link")
+
+        if magic_link.get('type') != 'invite':
+            log_debug(f"SECURITY: Wrong token type used: {magic_link.get('type')}", service="auth")
+            raise HTTPException(status_code=400, detail="Invalid link type - expected invite")
+
+        # Step 3: Consume token FIRST to prevent race conditions
+        if not consume_magic_link_db(supabase_client, magic_link_token):
+            log_debug("SECURITY: Token consumption failed - likely already used", service="auth")
+            raise HTTPException(status_code=400, detail="Invitation link has already been used")
+
+        # Step 4: Extract TRUSTED data from token (NOT from request body)
+        email = magic_link['email']
+        metadata = magic_link.get('metadata', {})
+        first_name = metadata.get('first_name', '')
+        last_name = metadata.get('last_name', '')
+        role = metadata.get('role', [])
+        school_id = metadata.get('school_id', '')
+
+        log_debug(f"SECURITY: Using trusted data from token - email: {email}, role: {role}, school_id: {school_id}", service="auth")
+
+        # Step 5: Only password comes from request body
         password = payload.get("password")
-        first_name = payload.get("first_name", "")
-        last_name = payload.get("last_name", "")
-        role = payload.get("role", [])
-        school_id = payload.get("school_id", "")
-        
-        if not email or not password:
-            raise HTTPException(status_code=400, detail="Email and password are required")
+        if not password:
+            raise HTTPException(status_code=400, detail="Password is required")
         
         log_debug(f"Creating/updating user account for: {email}", service="auth")
-        
-        # Check if user already exists
-        supabase_client = get_supabase_client()
+
+        # Check if user already exists (supabase_client already initialized above)
         existing_user = None
         try:
             auth_users = get_supabase_client().auth.admin.list_users()
@@ -278,9 +324,7 @@ async def create_user_service(payload: dict):
         # Auto-demote the original recruiter if this is an admin accepting an invite
         if "admin" in role and school_id:
             try:
-                supabase_client = get_supabase_client()
-
-                # Find pending invite for this email and school
+                # Find pending invite for this email and school (supabase_client already initialized)
                 invite_response = supabase_client.table("admin_invites").select("*").eq(
                     "invited_admin_email", email.lower()
                 ).eq("school_id", school_id).eq("status", "pending").execute()

@@ -121,21 +121,28 @@ def validate_magic_link_db(supabase_client, token: str):
         return None
 
 def consume_magic_link_db(supabase_client, token: str):
-    """Mark a magic link as used"""
+    """Mark a magic link as used atomically.
+
+    SECURITY: Uses .eq("used", False) to prevent race conditions.
+    Only succeeds if token exists AND hasn't been used yet.
+    """
     print(f"🔄 Consuming magic link token: {token[:8]}...")
-    
+
     try:
         # Mark as used with timezone-aware timestamp
         used_at_timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+00:00'
-        
+
+        # SECURITY: Atomic update - only succeeds if token is not already used
+        # This prevents race conditions where two requests validate simultaneously
         response = supabase_client.table("magic_links").update({
             "used": True,
             "used_at": used_at_timestamp
-        }).eq("token", token).execute()
-        
+        }).eq("token", token).eq("used", False).execute()
+
         if response.data:
             print("✅ Magic link consumed successfully")
             return True
+        print("⚠️ Magic link already consumed or not found")
         return False
         
     except Exception as e:
