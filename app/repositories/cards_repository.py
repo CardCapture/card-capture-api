@@ -1,23 +1,27 @@
 from typing import List, Dict, Any, Union
 from datetime import datetime, timezone
-from app.utils.archive_logging import log_archive_debug
 from app.utils.db_utils import (
-    ensure_atomic_updates,
     safe_db_operation,
     validate_db_response,
-    handle_db_error
 )
-from fastapi import HTTPException
 
 @safe_db_operation("Get cards")
-def get_cards_db(supabase_client, event_id: Union[str, None] = None) -> List[Dict[str, Any]]:
-    """Get cards from both reviewed_data (V1) and student_school_interactions (V2)."""
+def get_cards_db(supabase_client, event_id: Union[str, None] = None, school_id: Union[str, None] = None) -> List[Dict[str, Any]]:
+    """Get cards from both reviewed_data (V1) and student_school_interactions (V2).
+
+    Args:
+        supabase_client: The Supabase client
+        event_id: Optional event ID to filter by
+        school_id: Optional school ID to filter by (for multi-tenant isolation)
+    """
     all_cards = []
 
     # Fetch V1 cards from reviewed_data
     query_v1 = supabase_client.table("reviewed_data").select("*")
     if event_id:
         query_v1 = query_v1.eq("event_id", event_id)
+    if school_id:
+        query_v1 = query_v1.eq("school_id", school_id)
     response_v1 = query_v1.execute()
 
     if validate_db_response(response_v1, "Get cards from reviewed_data"):
@@ -28,6 +32,8 @@ def get_cards_db(supabase_client, event_id: Union[str, None] = None) -> List[Dic
     query_v2 = supabase_client.table("student_school_interactions").select("*")
     if event_id:
         query_v2 = query_v2.eq("event_id", event_id)
+    if school_id:
+        query_v2 = query_v2.eq("school_id", school_id)
     response_v2 = query_v2.execute()
 
     if validate_db_response(response_v2, "Get cards from student_school_interactions"):

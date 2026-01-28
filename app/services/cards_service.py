@@ -1,13 +1,7 @@
-from typing import List, Dict, Any, Union
-from fastapi.responses import JSONResponse
-from fastapi import HTTPException
+from typing import List, Dict, Any, Optional
 import traceback
-from app.models.card import (
-    MarkExportedPayload,
-    ArchiveCardsPayload,
-    DeleteCardsPayload,
-    MoveCardsPayload
-)
+from fastapi.responses import JSONResponse
+from app.models.card import MarkExportedPayload
 from app.core.clients import get_supabase_client
 from app.repositories.cards_repository import (
     get_cards_db,
@@ -19,15 +13,17 @@ from app.repositories.cards_repository import (
 from app.utils.archive_logging import log_archive_debug
 from app.utils.retry_utils import log_debug
 
-async def get_cards_service(event_id: str = None, school_id: str = None):
+async def get_cards_service(event_id: Optional[str] = None, school_id: Optional[str] = None):
     try:
         log_debug("Received /cards request", service="cards")
-        
+
         if event_id:
             log_debug(f"Filtering by event_id: {event_id}", service="cards")
-        
+        if school_id:
+            log_debug(f"Filtering by school_id: {school_id}", service="cards")
+
         supabase_client = get_supabase_client()
-        result = get_cards_db(supabase_client, event_id)
+        result = get_cards_db(supabase_client, event_id, school_id)
         log_debug(f"Found {len(result)} reviewed records", service="cards")
         log_debug(f"Returning {len(result)} non-deleted, non-archived records", service="cards")
         return result
@@ -88,7 +84,7 @@ async def mark_as_exported_service(document_ids: List[str]) -> JSONResponse:
     
     log_debug(f"Recording export timestamp for {len(document_ids)} records...", service="cards")
     try:
-        update_response = mark_as_exported_db(supabase_client, document_ids)
+        mark_as_exported_db(supabase_client, document_ids)
         log_debug(f"Successfully recorded export timestamp for {len(document_ids)} records", service="cards")
         return JSONResponse(status_code=200, content={"message": f"{len(document_ids)} records export timestamp updated."})
     except Exception as e:
@@ -110,7 +106,7 @@ def delete_cards_service(document_ids: List[str]) -> JSONResponse:
     
     log_debug(f"Deleting {len(document_ids)} cards...", service="cards")
     
-    delete_response = delete_cards_db(supabase_client, document_ids)
+    delete_cards_db(supabase_client, document_ids)
     
     log_debug(f"Successfully deleted {len(document_ids)} cards", service="cards")
     return JSONResponse(status_code=200, content={"message": f"Successfully deleted {len(document_ids)} cards."})
@@ -134,7 +130,7 @@ def move_cards_service(document_ids: List[str], status: str = "reviewed") -> JSO
     
     log_debug(f"Successfully moved {len(document_ids)} cards to status '{status}'", service="cards")
     
-    update_response = move_cards_db(supabase_client, document_ids, status)
+    move_cards_db(supabase_client, document_ids, status)
     
     return JSONResponse(status_code=200, content={"message": f"Successfully moved {len(document_ids)} cards to {status}."})
 
