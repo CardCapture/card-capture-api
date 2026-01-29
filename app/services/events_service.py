@@ -21,9 +21,9 @@ def has_role(user, role_name):
     return role_name in user_roles
 
 def can_create_events(user):
-    """Check if user can create events (admin or recruiter)"""
+    """Check if user can create events (admin, recruiter, or reviewer)"""
     user_roles = user.get("role") or []
-    return any(role in user_roles for role in ["admin", "recruiter"])
+    return any(role in user_roles for role in ["admin", "recruiter", "reviewer"])
 
 def can_archive_events(user):
     """Check if user can archive events (admin or recruiter)"""
@@ -53,7 +53,7 @@ async def create_event_service(payload, user):
     # SECURITY: Verify user has permission to create events
     if not can_create_events(user):
         log_debug(f"SECURITY: User {user.get('id')} denied event creation - insufficient role", service="events")
-        raise HTTPException(status_code=403, detail="Only admins and recruiters can create events")
+        raise HTTPException(status_code=403, detail="Only admins, recruiters, and reviewers can create events")
 
     # SECURITY: Determine school_id based on user type
     user_school_id = user.get("school_id")

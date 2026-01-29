@@ -147,19 +147,24 @@ class TestCreateEventPermissions:
         assert response.status_code == 200
         mock_insert.assert_called_once()
 
-    def test_reviewer_cannot_create_event(self, reviewer_user, event_payload):
-        """Reviewer users should NOT be able to create events."""
-        from fastapi import HTTPException
-
+    def test_reviewer_can_create_event(self, reviewer_user, event_payload):
+        """Reviewer users should be able to create events."""
         mock_client = MagicMock()
+        mock_insert_result = Mock(data=[{
+            "id": "new-event-123",
+            "name": "Test Event 2025",
+            "date": "2025-10-15",
+            "school_id": "school-123",
+            "status": "active",
+        }])
 
-        with patch('app.services.events_service.get_supabase_client', return_value=mock_client):
+        with patch('app.services.events_service.get_supabase_client', return_value=mock_client), \
+             patch('app.services.events_service.insert_event_db', return_value=mock_insert_result) as mock_insert:
             from app.services.events_service import create_event_service
-            with pytest.raises(HTTPException) as exc_info:
-                run_async(create_event_service(event_payload, reviewer_user))
+            response = run_async(create_event_service(event_payload, reviewer_user))
 
-        assert exc_info.value.status_code == 403
-        assert "Only admins and recruiters can create events" in str(exc_info.value.detail)
+        assert response.status_code == 200
+        mock_insert.assert_called_once()
 
     def test_user_with_no_role_cannot_create_event(self, event_payload):
         """Users with no roles should NOT be able to create events."""
@@ -381,12 +386,12 @@ class TestCanCreateEvents:
         user = {"role": ["recruiter"]}
         assert can_create_events(user) is True
 
-    def test_reviewer_cannot_create(self):
-        """Reviewer role should return False."""
+    def test_reviewer_can_create(self):
+        """Reviewer role should return True."""
         from app.services.events_service import can_create_events
 
         user = {"role": ["reviewer"]}
-        assert can_create_events(user) is False
+        assert can_create_events(user) is True
 
     def test_multiple_roles_with_admin(self):
         """User with multiple roles including admin should return True."""
