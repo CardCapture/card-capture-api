@@ -470,7 +470,7 @@ async def enroll(
         raise
     except Exception as e:
         log_debug(f"MFA Enroll] Error: {e}", service="mfa")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to enroll MFA. Please try again.")
 
 
 @router.post("/verify-enrollment")
@@ -563,7 +563,7 @@ async def verify_enrollment(
         raise
     except Exception as e:
         log_debug(f"MFA Verify Enrollment] Error: {e}", service="mfa")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to verify enrollment. Please try again.")
 
 
 @router.post("/challenge")
@@ -650,7 +650,7 @@ async def challenge(
         raise
     except Exception as e:
         log_debug(f"MFA Challenge] Error: {e}", service="mfa")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to send verification code. Please try again.")
 
 
 @router.post("/verify")
@@ -722,7 +722,7 @@ async def verify(
         raise
     except Exception as e:
         log_debug(f"MFA Verify] Error: {e}", service="mfa")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to verify code. Please try again.")
 
 
 @router.post("/status")
@@ -768,6 +768,6 @@ async def status(
     except Exception as e:
         log_debug(f"MFA Status] Error: {e}", service="mfa")
         return JSONResponse(content={
-            "error": str(e),
+            "error": "Failed to get MFA status",
             "needs_enrollment": True
         })
