@@ -15,16 +15,17 @@ from typing import Union
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from app.utils.archive_logging import log_archive_debug
+from app.utils.retry_utils import log_debug
 
 async def get_cards_controller(event_id: Union[str, None] = None):
     return await get_cards_service(event_id)
 
 async def mark_as_exported_controller(payload: MarkExportedPayload):
     document_ids = payload.get_document_ids()
-    print(f"📤 Mark as exported controller received payload: {payload.dict()}")
-    print(f"📤 Document IDs: {document_ids}")
-    print(f"📤 Number of document IDs: {len(document_ids)}")
-    
+    log_debug(f"Mark as exported controller received payload: {payload.dict()}", service="cards")
+    log_debug(f"Document IDs: {document_ids}", service="cards")
+    log_debug(f"Number of document IDs: {len(document_ids)}", service="cards")
+
     return await mark_as_exported_service(document_ids)
 
 async def archive_cards_controller(payload):

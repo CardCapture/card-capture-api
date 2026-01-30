@@ -8,6 +8,7 @@ from app.utils.db_utils import (
     validate_db_response,
     handle_db_error
 )
+from app.utils.retry_utils import log_debug
 
 @safe_db_operation("Insert processing job")
 def insert_processing_job_db(supabase_client, job_data: Dict[str, Any]):
@@ -60,9 +61,9 @@ def update_job_status_with_review(
     """
     Update job status and create/update reviewed data in a transaction
     """
-    print(f"[DATABASE DEBUG] === UPDATE JOB STATUS WITH REVIEW ===")
-    print(f"[DATABASE DEBUG] Job ID: {job_id}")
-    print(f"[DATABASE DEBUG] Status: {status}")
+    log_debug(f"[DATABASE DEBUG] === UPDATE JOB STATUS WITH REVIEW ===", service="uploads")
+    log_debug(f"[DATABASE DEBUG] Job ID: {job_id}", service="uploads")
+    log_debug(f"[DATABASE DEBUG] Status: {status}", service="uploads")
     
     # 🔍 IMPROVED JSON VALIDATION: Check and fix corruption before database operations
     from app.utils.fix_json_corruption import improved_json_validation, validate_and_fix_review_data
@@ -70,25 +71,25 @@ def update_job_status_with_review(
     try:
         # Validate and potentially fix the review data
         validation_result = improved_json_validation(review_data)
-        print(f"[DATABASE DEBUG] JSON validation result: {validation_result}")
+        log_debug(f"[DATABASE DEBUG] JSON validation result: {validation_result}", service="uploads")
         
         if not validation_result['valid']:
-            print(f"[DATABASE DEBUG] 🚨 JSON ISSUES DETECTED: {validation_result['issues']}")
+            log_debug(f"[DATABASE DEBUG] JSON ISSUES DETECTED: {validation_result['issues']}", service="uploads")
             # Attempt to fix the data
             try:
                 review_data = validate_and_fix_review_data(review_data)
-                print(f"[DATABASE DEBUG] ✅ JSON corruption fixed automatically")
+                log_debug(f"[DATABASE DEBUG] JSON corruption fixed automatically", service="uploads")
             except ValueError as fix_error:
-                print(f"[DATABASE DEBUG] ❌ Unable to fix JSON corruption: {fix_error}")
+                log_debug(f"[DATABASE DEBUG] Unable to fix JSON corruption: {fix_error}", service="uploads")
                 raise HTTPException(status_code=500, detail=f"Data corruption detected and cannot be fixed: {fix_error}")
         else:
-            print(f"[DATABASE DEBUG] ✅ JSON validation passed - serialized length: {validation_result['serialized_length']}")
+            log_debug(f"[DATABASE DEBUG] JSON validation passed - serialized length: {validation_result['serialized_length']}", service="uploads")
         
     except Exception as e:
-        print(f"[DATABASE DEBUG] ❌ JSON VALIDATION FAILED: {str(e)}")
+        log_debug(f"[DATABASE DEBUG] JSON VALIDATION FAILED: {str(e)}", service="uploads")
         # Log the raw data that's causing issues
-        print(f"[DATABASE DEBUG] Raw review_data type: {type(review_data)}")
-        print(f"[DATABASE DEBUG] Raw fields keys: {list(review_data.get('fields', {}).keys()) if isinstance(review_data.get('fields'), dict) else 'NOT_DICT'}")
+        log_debug(f"[DATABASE DEBUG] Raw review_data type: {type(review_data)}", service="uploads")
+        log_debug(f"[DATABASE DEBUG] Raw fields keys: {list(review_data.get('fields', {}).keys()) if isinstance(review_data.get('fields'), dict) else 'NOT_DICT'}", service="uploads")
         raise HTTPException(status_code=500, detail=f"JSON validation failed: {str(e)}")
     
     # Update job status first
@@ -97,21 +98,21 @@ def update_job_status_with_review(
         "updated_at": datetime.now(timezone.utc).isoformat()
     }).eq("id", job_id).execute()
     
-    # Then upsert review data 
-    print(f"[DATABASE DEBUG] About to upsert reviewed_data...")
-    print(f"[DATABASE DEBUG] 🔍 CRITICAL: Upserting with review_status = {review_data.get('review_status')}")
-    print(f"[DATABASE DEBUG] 🔍 CRITICAL: Document ID = {review_data.get('document_id')}")
+    # Then upsert review data
+    log_debug(f"[DATABASE DEBUG] About to upsert reviewed_data...", service="uploads")
+    log_debug(f"[DATABASE DEBUG] CRITICAL: Upserting with review_status = {review_data.get('review_status')}", service="uploads")
+    log_debug(f"[DATABASE DEBUG] CRITICAL: Document ID = {review_data.get('document_id')}", service="uploads")
     
     # Check if this is an UPDATE or INSERT
     existing = supabase_client.table("reviewed_data").select("review_status").eq("document_id", review_data.get("document_id")).maybe_single().execute()
     if existing and existing.data:
-        print(f"[DATABASE DEBUG] 🔍 CRITICAL: This is an UPDATE! Previous status = {existing.data.get('review_status')}")
+        log_debug(f"[DATABASE DEBUG] CRITICAL: This is an UPDATE! Previous status = {existing.data.get('review_status')}", service="uploads")
     else:
-        print(f"[DATABASE DEBUG] 🔍 CRITICAL: This is a NEW INSERT")
+        log_debug(f"[DATABASE DEBUG] CRITICAL: This is a NEW INSERT", service="uploads")
     
     review_response = supabase_client.table("reviewed_data").upsert(review_data, on_conflict="document_id").execute()
-    
-    print(f"[DATABASE DEBUG] Database operations completed successfully")
+
+    log_debug(f"[DATABASE DEBUG] Database operations completed successfully", service="uploads")
     return {
         "job": job_response,
         "review": review_response

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from app.core.auth import get_current_user
 from app.services.notification_service import process_notifications
+from app.utils.retry_utils import log_debug
 from typing import Optional
 
 router = APIRouter(tags=["Notifications"])
@@ -25,7 +26,7 @@ async def process_hourly_notifications():
         })
 
     except Exception as e:
-        print(f"❌ Error processing hourly notifications: {e}")
+        log_debug(f"Error processing hourly notifications: {e}", service="notifications")
         return JSONResponse(status_code=500, content={
             "error": "Failed to process notifications",
             "details": str(e)
@@ -89,7 +90,7 @@ async def test_notification(user=Depends(get_current_user)):
             })
 
     except Exception as e:
-        print(f"❌ Error sending test notification: {e}")
+        log_debug(f"Error sending test notification: {e}", service="notifications")
         return JSONResponse(status_code=500, content={
             "error": "Failed to send test notification",
             "details": str(e)

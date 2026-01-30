@@ -4,14 +4,15 @@ import secrets
 import hashlib
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
+from app.utils.retry_utils import log_debug, mask_email, mask_token
 
 def login_db(supabase_auth, credentials: dict):
-    print("🔐 Login attempt for:", credentials.get("email"))
+    log_debug(f"🔐 Login attempt for: {mask_email(credentials.get('email', ''))}", service="auth")
     response = supabase_auth.auth.sign_in_with_password({
         "email": credentials.get("email"),
         "password": credentials.get("password")
     })
-    print("✅ Login successful")
+    log_debug("✅ Login successful", service="auth")
     return response
 
 def get_user_profile_db(supabase_client, user_id: str):
@@ -27,7 +28,7 @@ def generate_secure_token(length: int = 32) -> str:
 
 def create_magic_link_db(supabase_client, email: str, link_type: str, metadata: dict = None):
     """Create a magic link token and store it in the database"""
-    print(f"🪄 Creating magic link for: {email} (type: {link_type})")
+    log_debug(f"🪄 Creating magic link for: {mask_email(email)} (type: {link_type})", service="auth")
     
     # Generate secure token
     token = generate_secure_token(32)
@@ -52,23 +53,23 @@ def create_magic_link_db(supabase_client, email: str, link_type: str, metadata: 
         if not response.data:
             raise Exception("Failed to create magic link")
         
-        print(f"✅ Magic link created with token: {token[:8]}...")
+        log_debug(f"✅ Magic link created with token: {mask_token(token)}", service="auth")
         return token
-        
+
     except Exception as e:
-        print(f"❌ Error creating magic link: {str(e)}")
+        log_debug(f"❌ Error creating magic link: {str(e)}", service="auth")
         raise Exception(f"Error creating magic link: {str(e)}")
 
 def validate_magic_link_db(supabase_client, token: str):
     """Validate a magic link token and return the link data"""
-    print(f"🔍 Validating magic link token: {token[:8]}...")
+    log_debug(f"🔍 Validating magic link token: {mask_token(token)}", service="auth")
     
     try:
         # Fetch the magic link
         response = supabase_client.table("magic_links").select("*").eq("token", token).eq("used", False).execute()
         
         if not response.data:
-            print("❌ Magic link not found or already used")
+            log_debug("❌ Magic link not found or already used", service="auth")
             return None
         
         magic_link = response.data[0]
@@ -96,28 +97,28 @@ def validate_magic_link_db(supabase_client, token: str):
             expires_at = datetime.fromisoformat(normalized_dt_str)
             
         except Exception as parse_error:
-            print(f"❌ Failed to parse expires_at: {expires_at_str}, error: {str(parse_error)}")
+            log_debug(f"❌ Failed to parse expires_at: {expires_at_str}, error: {str(parse_error)}", service="auth")
             # Fallback - try a simpler parsing approach
             try:
                 # Strip everything after the seconds and try again
                 simple_dt_str = expires_at_str.split(".")[0] if "." in expires_at_str else expires_at_str
                 simple_dt_str = simple_dt_str.replace("+00:00", "").replace("Z", "")
                 expires_at = datetime.fromisoformat(simple_dt_str)
-                print(f"✅ Fallback parsing successful for: {simple_dt_str}")
+                log_debug(f"✅ Fallback parsing successful for: {simple_dt_str}", service="auth")
             except:
-                print(f"❌ All datetime parsing failed, treating as not expired")
+                log_debug("❌ All datetime parsing failed, treating as not expired", service="auth")
                 # If we still can't parse, assume it's valid (not expired)
                 expires_at = datetime.utcnow() + timedelta(hours=1)
         
         if datetime.utcnow() > expires_at:
-            print("❌ Magic link has expired")
+            log_debug("❌ Magic link has expired", service="auth")
             return None
-        
-        print(f"✅ Magic link validated for: {magic_link['email']} (type: {magic_link['type']})")
+
+        log_debug(f"✅ Magic link validated for: {mask_email(magic_link['email'])} (type: {magic_link['type']})", service="auth")
         return magic_link
-        
+
     except Exception as e:
-        print(f"❌ Error validating magic link: {str(e)}")
+        log_debug(f"❌ Error validating magic link: {str(e)}", service="auth")
         return None
 
 def consume_magic_link_db(supabase_client, token: str):
@@ -126,7 +127,7 @@ def consume_magic_link_db(supabase_client, token: str):
     SECURITY: Uses .eq("used", False) to prevent race conditions.
     Only succeeds if token exists AND hasn't been used yet.
     """
-    print(f"🔄 Consuming magic link token: {token[:8]}...")
+    log_debug(f"🔄 Consuming magic link token: {mask_token(token)}", service="auth")
 
     try:
         # Mark as used with timezone-aware timestamp
@@ -140,18 +141,18 @@ def consume_magic_link_db(supabase_client, token: str):
         }).eq("token", token).eq("used", False).execute()
 
         if response.data:
-            print("✅ Magic link consumed successfully")
+            log_debug("✅ Magic link consumed successfully", service="auth")
             return True
-        print("⚠️ Magic link already consumed or not found")
+        log_debug("⚠️ Magic link already consumed or not found", service="auth")
         return False
-        
+
     except Exception as e:
-        print(f"❌ Error consuming magic link: {str(e)}")
+        log_debug(f"❌ Error consuming magic link: {str(e)}", service="auth")
         return False
 
 def create_temporary_session_db(supabase_client, email: str):
     """Create a temporary Supabase session for the user"""
-    print(f"🔑 Creating temporary session for: {email}")
+    log_debug(f"🔑 Creating temporary session for: {mask_email(email)}", service="auth")
     
     try:
         # Check if user exists
@@ -164,7 +165,7 @@ def create_temporary_session_db(supabase_client, email: str):
                 break
         
         if not user:
-            print(f"❌ User not found: {email}")
+            log_debug(f"❌ User not found: {mask_email(email)}", service="auth")
             return None
         
         # Generate a magic link that contains session tokens
@@ -176,7 +177,7 @@ def create_temporary_session_db(supabase_client, email: str):
         )
         
         if hasattr(session_response, 'error') and session_response.error:
-            print(f"❌ Session generation error: {session_response.error}")
+            log_debug(f"❌ Session generation error: {session_response.error}", service="auth")
             return None
         
         # Extract the tokens from the magic link URL if available
@@ -188,13 +189,12 @@ def create_temporary_session_db(supabase_client, email: str):
             "generated_at": generated_at_str
         }
         
-        print(f"✅ Temporary session created for: {email}")
+        log_debug(f"✅ Temporary session created for: {mask_email(email)}", service="auth")
         return session_data
-        
+
     except Exception as e:
-        print(f"❌ Error creating temporary session: {str(e)}")
         import traceback
-        print(f"Stack trace: {traceback.format_exc()}")
+        log_debug(f"❌ Error creating temporary session: {str(e)}", data={"traceback": traceback.format_exc()}, service="auth")
         return None
 
 def get_frontend_url():
@@ -214,7 +214,7 @@ def get_frontend_url():
 
 def send_magic_link_email_db(supabase_client, email: str, link_type: str, metadata: dict = None):
     """Create magic link and send email"""
-    print(f"📧 Sending magic link email to: {email} (type: {link_type})")
+    log_debug(f"📧 Sending magic link email to: {mask_email(email)} (type: {link_type})", service="auth")
     
     try:
         # Create magic link token
@@ -225,8 +225,8 @@ def send_magic_link_email_db(supabase_client, email: str, link_type: str, metada
         
         # Create magic link URL with query parameters (Outlook-friendly)
         magic_url = f"{frontend_url}/magic-link?token={token}&type={link_type}"
-        
-        print(f"🔗 Magic link URL: {magic_url}")
+
+        log_debug(f"🔗 Magic link URL created for {mask_email(email)}", service="auth")
         
         # For now, we'll use Supabase's email system to send a custom email
         # In a production system, you might want to use a dedicated email service
@@ -255,18 +255,18 @@ def send_magic_link_email_db(supabase_client, email: str, link_type: str, metada
             return {"magic_url": magic_url, "token": token}
         
         if hasattr(response, 'error') and response.error:
-            print(f"❌ Email sending error: {response.error}")
+            log_debug(f"❌ Email sending error: {response.error}", service="auth")
             raise Exception(f"Failed to send email: {response.error}")
-        
-        print(f"✅ Magic link email sent to: {email}")
+
+        log_debug(f"✅ Magic link email sent to: {mask_email(email)}", service="auth")
         return {"success": True, "magic_url": magic_url, "token": token}
-        
+
     except Exception as e:
-        print(f"❌ Error sending magic link email: {str(e)}")
+        log_debug(f"❌ Error sending magic link email: {str(e)}", service="auth")
         raise Exception(f"Error sending magic link email: {str(e)}")
 
 # Legacy functions updated to use magic links
 def reset_password_db(supabase_client, email: str):
     """Send password reset email using magic links"""
-    print(f"🚨 RESET_PASSWORD_DB FUNCTION CALLED - Magic Link Version - Email: {email}")
+    log_debug(f"🚨 RESET_PASSWORD_DB FUNCTION CALLED - Magic Link Version - Email: {mask_email(email)}", service="auth")
     return send_magic_link_email_db(supabase_client, email, "password_reset") 

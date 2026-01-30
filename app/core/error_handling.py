@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import traceback
+from app.utils.retry_utils import log_error
 
 def register_exception_handlers(app: FastAPI):
     @app.exception_handler(HTTPException)
@@ -12,7 +13,7 @@ def register_exception_handlers(app: FastAPI):
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):
-        traceback.print_exc()
+        log_error(f"Unhandled exception: {exc}", data={"traceback": traceback.format_exc()}, service="error_handler")
         return JSONResponse(
             status_code=500,
             content={"error": "Internal server error", "detail": str(exc)}

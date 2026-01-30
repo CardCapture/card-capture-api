@@ -101,8 +101,8 @@ async def create_event_service(payload, user):
         return JSONResponse(status_code=200, content=response.data[0])
 
     except Exception as e:
-        log_debug(f"Error creating event: {e}", service="events")
-        import traceback; traceback.print_exc()
+        import traceback
+        log_debug(f"Error creating event: {e}", data={"traceback": traceback.format_exc()}, service="events")
         return JSONResponse(status_code=500, content={"error": "Failed to create event."})
 
 async def update_event_service(event_id: str, payload, user):
@@ -187,8 +187,8 @@ async def archive_events_service(payload):
                 }
             )
     except Exception as e:
-        log_debug(f"Error archiving events: {e}", service="events")
-        import traceback; traceback.print_exc()
+        import traceback
+        log_debug(f"Error archiving events: {e}", data={"traceback": traceback.format_exc()}, service="events")
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}

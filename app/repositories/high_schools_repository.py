@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 
 class HighSchoolsRepository:
     def __init__(self):
@@ -77,9 +78,9 @@ class HighSchoolsRepository:
                         local_results = city_query.ilike("name", f"%{normalized_query}%").execute()
                         if local_results.data:
                             add_unique_results(local_results.data, priority_tier=1)
-                            print(f"Tier 1A: Found {len(local_results.data)} local matches in {city}, {state}")
+                            log_debug(f"Tier 1A: Found {len(local_results.data)} local matches in {city}, {state}", service="high_schools")
                     except Exception as e:
-                        print(f"Tier 1A city search failed: {e}")
+                        log_debug(f"Tier 1A city search failed: {e}", service="high_schools")
 
                 # 1B: State-wide matches
                 try:
@@ -87,7 +88,7 @@ class HighSchoolsRepository:
                     state_results = state_query.ilike("name", f"%{normalized_query}%").execute()
                     if state_results.data:
                         add_unique_results(state_results.data, priority_tier=1)
-                        print(f"Tier 1B: Found {len(state_results.data)} state matches in {state}")
+                        log_debug(f"Tier 1B: Found {len(state_results.data)} state matches in {state}", service="high_schools")
 
                     # Try original query if different
                     if query != normalized_query:
@@ -96,7 +97,7 @@ class HighSchoolsRepository:
                         if state_results_orig.data:
                             add_unique_results(state_results_orig.data, priority_tier=1)
                 except Exception as e:
-                    print(f"Tier 1B state search failed: {e}")
+                    log_debug(f"Tier 1B state search failed: {e}", service="high_schools")
 
             # TIER 2: Exact name matches from other states (if we need more results)
             if len([r for r in results if r.get('_search_tier', 1) == 1]) < limit:
@@ -116,9 +117,9 @@ class HighSchoolsRepository:
                                         result['_similarity'] = similarity
                                         results.append(result)
 
-                        print(f"Tier 2: Found cross-state exact matches")
+                        log_debug(f"Tier 2: Found cross-state exact matches", service="high_schools")
                 except Exception as e:
-                    print(f"Tier 2 exact match search failed: {e}")
+                    log_debug(f"Tier 2 exact match search failed: {e}", service="high_schools")
 
             # TIER 3: Word-based matches for broader coverage
             if len(results) < limit and len(normalized_query.split()) > 1:
@@ -170,11 +171,11 @@ class HighSchoolsRepository:
                     unique_results.append(result)
                     seen_ids.add(result['id'])
 
-            print(f"Final results: {len(unique_results)} schools found for '{query}'")
+            log_debug(f"Final results: {len(unique_results)} schools found for '{query}'", service="high_schools")
             return unique_results[:limit]
-            
+
         except Exception as e:
-            print(f"Error searching high schools: {str(e)}")
+            log_debug(f"Error searching high schools: {str(e)}", service="high_schools")
             raise
     
     def get_school_by_id(self, school_id: str) -> Optional[Dict[str, Any]]:
@@ -183,7 +184,7 @@ class HighSchoolsRepository:
             response = self.client.table(self.table).select("*").eq("id", school_id).execute()
             return response.data[0] if response.data else None
         except Exception as e:
-            print(f"Error getting school by ID: {str(e)}")
+            log_debug(f"Error getting school by ID: {str(e)}", service="high_schools")
             raise
     
     def get_schools_by_state(self, state: str, limit: int = 100) -> List[Dict[str, Any]]:
@@ -194,7 +195,7 @@ class HighSchoolsRepository:
             ).eq("state", state.upper()).limit(limit).order("name").execute()
             return response.data
         except Exception as e:
-            print(f"Error getting schools by state: {str(e)}")
+            log_debug(f"Error getting schools by state: {str(e)}", service="high_schools")
             raise
     
     def get_school_count(self) -> int:
@@ -203,5 +204,5 @@ class HighSchoolsRepository:
             response = self.client.table(self.table).select("count", count="exact").execute()
             return response.count
         except Exception as e:
-            print(f"Error getting school count: {str(e)}")
+            log_debug(f"Error getting school count: {str(e)}", service="high_schools")
             return 0

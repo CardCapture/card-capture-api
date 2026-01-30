@@ -88,8 +88,7 @@ async def mark_as_exported_service(document_ids: List[str]) -> JSONResponse:
         log_debug(f"Successfully recorded export timestamp for {len(document_ids)} records", service="cards")
         return JSONResponse(status_code=200, content={"message": f"{len(document_ids)} records export timestamp updated."})
     except Exception as e:
-        log_debug(f"Error recording export timestamp: {e}", service="cards")
-        traceback.print_exc()
+        log_debug(f"Error recording export timestamp: {e}", data={"traceback": traceback.format_exc()}, service="cards")
         return JSONResponse(status_code=500, content={"error": "Failed to record export timestamp."})
 
 def delete_cards_service(document_ids: List[str]) -> JSONResponse:

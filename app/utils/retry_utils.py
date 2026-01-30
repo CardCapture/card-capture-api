@@ -5,30 +5,79 @@ import json
 import os
 
 # Log levels: DEBUG=10, INFO=20, WARNING=30, ERROR=40
-# Only show console output if LOG_LEVEL is DEBUG (default for development)
+LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
 LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG").upper()
+LOG_LEVEL_NUM = LOG_LEVELS.get(LOG_LEVEL, 10)
 DEBUG_ENABLED = LOG_LEVEL == "DEBUG"
 
-def log_debug(message: str, data: Any = None, service: str = "general", verbose: bool = True):
+
+def mask_email(email: str) -> str:
+    """Mask email for logging (show first 2 chars + domain)."""
+    if not email or "@" not in email:
+        return "[invalid-email]"
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        masked_local = local[0] + "*" if local else "*"
+    else:
+        masked_local = local[:2] + "*" * (len(local) - 2)
+    return f"{masked_local}@{domain}"
+
+
+def mask_token(token: str, visible_chars: int = 8) -> str:
+    """Mask token for logging (show first N chars)."""
+    if not token:
+        return "[no-token]"
+    if len(token) <= visible_chars:
+        return token
+    return f"{token[:visible_chars]}..."
+
+
+def mask_pii(data: Any) -> Any:
     """
-    Common logging function for all services.
+    Recursively mask PII in data structures.
+    Masks emails, tokens, passwords, phone numbers.
+    """
+    if isinstance(data, str):
+        # Check if it looks like an email
+        if "@" in data and "." in data:
+            return mask_email(data)
+        return data
+    elif isinstance(data, dict):
+        masked = {}
+        for key, value in data.items():
+            key_lower = key.lower()
+            if any(pii in key_lower for pii in ["password", "secret", "token", "api_key", "apikey"]):
+                masked[key] = "[REDACTED]"
+            elif any(pii in key_lower for pii in ["email", "phone"]):
+                masked[key] = mask_email(str(value)) if "email" in key_lower else "[REDACTED]"
+            else:
+                masked[key] = mask_pii(value)
+        return masked
+    elif isinstance(data, list):
+        return [mask_pii(item) for item in data]
+    return data
+
+
+def _log(message: str, level: str = "DEBUG", data: Any = None, service: str = "general", verbose: bool = True):
+    """
+    Internal logging function with level support.
 
     Args:
         message: The message to log
+        level: Log level (DEBUG, INFO, WARNING, ERROR)
         data: Optional data to log (dict, list, or string)
-        service: Service name for log file and context (e.g., "gemini", "docai")
+        service: Service name for log file and context
         verbose: Whether to log detailed data
-
-    Environment:
-        LOG_LEVEL: Set to INFO/WARNING/ERROR in production to suppress console debug output
     """
+    level_num = LOG_LEVELS.get(level.upper(), 10)
+
     timestamp = datetime.now(timezone.utc).isoformat()
-    log_entry = f"[{timestamp}] [{service}] {message}"
+    log_entry = f"[{timestamp}] [{level}] [{service}] {message}"
 
     if data is not None:
         if verbose:
             if isinstance(data, (dict, list)):
-                log_entry += "\n" + json.dumps(data, indent=2)
+                log_entry += "\n" + json.dumps(data, indent=2, default=str)
             else:
                 log_entry += f" | {str(data)}"
         else:
@@ -49,9 +98,61 @@ def log_debug(message: str, data: Any = None, service: str = "general", verbose:
     except Exception:
         pass  # Don't fail on log write errors
 
-    # Only print to stdout if DEBUG is enabled
-    if DEBUG_ENABLED:
+    # Print to stdout based on log level
+    if level_num >= LOG_LEVEL_NUM:
         print(log_entry, flush=True)
+
+
+def log_debug(message: str, data: Any = None, service: str = "general", verbose: bool = True):
+    """
+    Log a DEBUG level message. Shown only when LOG_LEVEL=DEBUG.
+
+    Args:
+        message: The message to log
+        data: Optional data to log (dict, list, or string)
+        service: Service name for log file and context (e.g., "gemini", "docai")
+        verbose: Whether to log detailed data
+    """
+    _log(message, level="DEBUG", data=data, service=service, verbose=verbose)
+
+
+def log_info(message: str, data: Any = None, service: str = "general", verbose: bool = True):
+    """
+    Log an INFO level message. Shown when LOG_LEVEL is DEBUG or INFO.
+
+    Args:
+        message: The message to log
+        data: Optional data to log
+        service: Service name for log file and context
+        verbose: Whether to log detailed data
+    """
+    _log(message, level="INFO", data=data, service=service, verbose=verbose)
+
+
+def log_warn(message: str, data: Any = None, service: str = "general", verbose: bool = True):
+    """
+    Log a WARNING level message. Shown unless LOG_LEVEL=ERROR.
+
+    Args:
+        message: The message to log
+        data: Optional data to log
+        service: Service name for log file and context
+        verbose: Whether to log detailed data
+    """
+    _log(message, level="WARNING", data=data, service=service, verbose=verbose)
+
+
+def log_error(message: str, data: Any = None, service: str = "general", verbose: bool = True):
+    """
+    Log an ERROR level message. Always shown.
+
+    Args:
+        message: The message to log
+        data: Optional data to log
+        service: Service name for log file and context
+        verbose: Whether to log detailed data
+    """
+    _log(message, level="ERROR", data=data, service=service, verbose=verbose)
 
 
 def retry_with_exponential_backoff(

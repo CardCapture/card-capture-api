@@ -9,11 +9,12 @@ from app.models.superadmin import SchoolCreate, SchoolResponse, SuperAdminCheck,
 from app.core.superadmin_auth import verify_superadmin
 from app.core.clients import get_supabase_client
 from app.controllers.users_controller import invite_user_controller
+from app.utils.retry_utils import log_debug
 
 router = APIRouter(prefix="/superadmin", tags=["SuperAdmin"])
 
 def log(msg):
-    print(f"[superadmin] {msg}")
+    log_debug(f"[superadmin] {msg}", service="superadmin")
 
 @router.get("/health")
 async def superadmin_health():
@@ -70,8 +71,7 @@ async def get_schools(current_user: Dict[str, Any] = Depends(verify_superadmin))
         return schools_with_counts
     
     except Exception as e:
-        log(f"❌ Error fetching schools: {e}")
-        traceback.print_exc()
+        log_debug(f"❌ Error fetching schools: {e}", data={"traceback": traceback.format_exc()}, service="superadmin")
         raise HTTPException(status_code=500, detail="Failed to fetch schools")
 
 @router.post("/schools")
@@ -129,8 +129,7 @@ async def create_school(school: SchoolCreate, current_user: Dict[str, Any] = Dep
             raise HTTPException(status_code=500, detail="Failed to create school")
     
     except Exception as e:
-        log(f"❌ Error creating school: {e}")
-        traceback.print_exc()
+        log_debug(f"❌ Error creating school: {e}", data={"traceback": traceback.format_exc()}, service="superadmin")
         raise HTTPException(status_code=500, detail="Failed to create school")
 
 @router.post("/schools/{school_id}/invite-admin")
@@ -205,6 +204,5 @@ async def invite_school_admin(
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        log(f"❌ Error inviting school admin: {e}")
-        traceback.print_exc()
+        log_debug(f"❌ Error inviting school admin: {e}", data={"traceback": traceback.format_exc()}, service="superadmin")
         raise HTTPException(status_code=500, detail="Failed to invite school admin") 

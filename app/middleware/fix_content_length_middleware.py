@@ -6,6 +6,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import StreamingResponse, JSONResponse
 import json
 from typing import Any
+from app.utils.retry_utils import log_debug
 
 class ContentLengthFixMiddleware(BaseHTTPMiddleware):
     """
@@ -47,6 +48,6 @@ class ContentLengthFixMiddleware(BaseHTTPMiddleware):
                         
             except Exception as e:
                 # Log the error but don't break the response
-                print(f"[ContentLengthFixMiddleware] Error processing response: {e}")
+                log_debug(f"[ContentLengthFixMiddleware] Error processing response: {e}", service="middleware")
                 
         return response

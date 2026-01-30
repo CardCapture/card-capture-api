@@ -5,8 +5,7 @@ from dotenv import load_dotenv
 # Load environment variables
 if os.path.exists(".env"):
     load_dotenv(dotenv_path=".env")
-else:
-    print("ℹ️ Info: .env file not found. Relying on system environment variables.")
+# Note: Silently proceed if .env not found - rely on system environment variables
 
 # Google Cloud Configuration
 GOOGLE_PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID", "878585200500")
@@ -37,8 +36,8 @@ TRIMMED_FOLDER = os.environ.get("TRIMMED_FOLDER", "/tmp/uploads/trimmed")
 try:
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(TRIMMED_FOLDER, exist_ok=True)
-except OSError as e:
-    print(f"Warning: Could not create upload folders: {e}. Using /tmp as fallback.")
+except OSError:
+    # Fallback to /tmp for Cloud Run (writable filesystem)
     UPLOAD_FOLDER = "/tmp"
     TRIMMED_FOLDER = "/tmp"
 
