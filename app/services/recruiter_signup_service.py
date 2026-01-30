@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List
 from fastapi import HTTPException
 
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 from app.repositories.public_schools_repository import PublicSchoolsRepository
 from app.repositories.universal_events_repository import UniversalEventsRepository
 from app.repositories.event_purchases_repository import EventPurchasesRepository
@@ -431,11 +432,11 @@ class RecruiterSignupService:
                 "status": "pending"
             }).execute()
 
-            print(f"✅ Admin invite sent to {admin_email} for school {school_id}")
+            log_debug(f"Admin invite sent for school {school_id}", service="recruiter_signup")
 
         except Exception as e:
             # Log but don't fail the signup if invite fails
-            print(f"⚠️ Failed to send admin invite (non-fatal): {str(e)}")
+            log_debug(f"Failed to send admin invite (non-fatal): {str(e)}", service="recruiter_signup")
 
 
 async def get_public_schools(

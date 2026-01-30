@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
 from fastapi import HTTPException, UploadFile
 from app.services.crm_events_service import CRMEventsService
+from app.utils.retry_utils import log_debug
 import csv
 import io
 from datetime import datetime, date
@@ -17,7 +18,7 @@ async def list_crm_events_controller(user: dict) -> dict:
         events = await service.list_events(school_id)
         return {"success": True, "events": events}
     except Exception as e:
-        print(f"Error listing CRM events: {str(e)}")
+        log_debug(f"Error listing CRM events: {str(e)}", service="crm")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def create_crm_event_controller(user: dict, payload: dict) -> dict:
@@ -49,7 +50,7 @@ async def create_crm_event_controller(user: dict, payload: dict) -> dict:
         event = await service.create_event(event_data)
         return {"success": True, "event": event}
     except Exception as e:
-        print(f"Error creating CRM event: {str(e)}")
+        log_debug(f"Error creating CRM event: {str(e)}", service="crm")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def update_crm_event_controller(user: dict, event_id: str, payload: dict) -> dict:
@@ -66,7 +67,7 @@ async def update_crm_event_controller(user: dict, event_id: str, payload: dict) 
         event = await service.update_event(event_id, school_id, payload)
         return {"success": True, "event": event}
     except Exception as e:
-        print(f"Error updating CRM event: {str(e)}")
+        log_debug(f"Error updating CRM event: {str(e)}", service="crm")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def delete_crm_event_controller(user: dict, event_id: str) -> dict:
@@ -83,7 +84,7 @@ async def delete_crm_event_controller(user: dict, event_id: str) -> dict:
         await service.delete_event(event_id, school_id)
         return {"success": True, "message": "Event deleted successfully"}
     except Exception as e:
-        print(f"Error deleting CRM event: {str(e)}")
+        log_debug(f"Error deleting CRM event: {str(e)}", service="crm")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def bulk_delete_crm_events_controller(user: dict, event_ids: List[str]) -> dict:
@@ -100,13 +101,13 @@ async def bulk_delete_crm_events_controller(user: dict, event_ids: List[str]) ->
         deleted_count = await service.bulk_delete_events(event_ids, school_id)
         return {"success": True, "deleted_count": deleted_count}
     except Exception as e:
-        print(f"Error bulk deleting CRM events: {str(e)}")
+        log_debug(f"Error bulk deleting CRM events: {str(e)}", service="crm")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> dict:
     """Process CSV upload with column mapping"""
     try:
-        print(f"📤 Starting CSV upload for user {user.get('email', 'unknown')}")
+        log_debug(f"Starting CSV upload for user", service="crm")
         
         school_id = user.get("school_id")
         if not school_id:
@@ -135,7 +136,7 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
             if row and any(str(value or "").strip() for value in row.values())
         ]
         total_rows = len(csv_rows)
-        print(f"📊 Processing {total_rows} CSV rows (received {raw_total}, skipped {raw_total - total_rows} blank rows)")
+        log_debug(f"Processing {total_rows} CSV rows (received {raw_total}, skipped {raw_total - total_rows} blank rows)", service="crm")
         
         # Process each row
         results = {
@@ -146,9 +147,9 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
         }
         
         # Parse and validate all rows first
-        print("🔍 Parsing and validating CSV data...")
-        print(f"📋 Received mapping: {mapping}")
-        print(f"📋 CSV headers (first row): {list(csv_rows[0].keys()) if csv_rows else 'No rows'}")
+        log_debug("Parsing and validating CSV data...", service="crm")
+        log_debug(f"Received mapping: {mapping}", service="crm")
+        log_debug(f"CSV headers (first row): {list(csv_rows[0].keys()) if csv_rows else 'No rows'}", service="crm")
         events_to_create = []
         
         # Pre-normalize mapping keys for consistent lookup
@@ -157,7 +158,7 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
             for key in ("name", "date", "crm_id")
         }
         norm_map = {k: v.replace("\ufeff", "") for k, v in norm_map.items()}
-        print(f"📋 Normalized mapping: {norm_map}")
+        log_debug(f"Normalized mapping: {norm_map}", service="crm")
 
         for row_num, row in enumerate(csv_rows, start=2):
             try:
@@ -166,10 +167,10 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
                 
                 # Debug output for first row
                 if row_num == 2:
-                    print(f"🔍 First data row (normalized): {norm_row}")
-                    print(f"🔍 Looking for name in column: '{norm_map.get('name', 'NOT SET')}'")
-                    print(f"🔍 Looking for date in column: '{norm_map.get('date', 'NOT SET')}'")
-                    print(f"🔍 Looking for crm_id in column: '{norm_map.get('crm_id', 'NOT SET')}'")
+                    log_debug(f"First data row (normalized): {norm_row}", service="crm")
+                    log_debug(f"Looking for name in column: '{norm_map.get('name', 'NOT SET')}'", service="crm")
+                    log_debug(f"Looking for date in column: '{norm_map.get('date', 'NOT SET')}'", service="crm")
+                    log_debug(f"Looking for crm_id in column: '{norm_map.get('crm_id', 'NOT SET')}'", service="crm")
                 
                 # Map columns based on user's mapping
                 # Only try to get values if the mapping column name is not empty
@@ -232,20 +233,20 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
                     "row": row_num,
                     "error": str(row_error)
                 })
-        
-        print(f"✅ Parsed {len(events_to_create)} valid events, {len(results['errors'])} errors")
+
+        log_debug(f"Parsed {len(events_to_create)} valid events, {len(results['errors'])} errors", service="crm")
         
         # Bulk create events using upsert (insert or update)
         if events_to_create:
-            print("🚀 Bulk creating events...")
+            log_debug("Bulk creating events...", service="crm")
             try:
                 created_events = await service.bulk_upsert_events(events_to_create)
                 results["created"] = len(created_events)
-                print(f"✅ Successfully created {results['created']} events")
+                log_debug(f"Successfully created {results['created']} events", service="crm")
             except Exception as e:
-                print(f"❌ Bulk create error: {str(e)}")
+                log_debug(f"Bulk create error: {str(e)}", service="crm")
                 # Fallback to individual creation if bulk fails
-                print("🔄 Falling back to individual creation...")
+                log_debug("Falling back to individual creation...", service="crm")
                 for event_data in events_to_create:
                     try:
                         await service.create_event(event_data)
@@ -258,18 +259,18 @@ async def upload_csv_controller(user: dict, file: UploadFile, mapping: dict) -> 
         
         # Log summary
         processed_total = results["created"] + results["updated"] + results["skipped"] + len(results["errors"])
-        print(f"CSV Import Summary - Total rows: {processed_total}, Created: {results['created']}, Updated: {results['updated']}, Skipped: {results['skipped']}, Errors: {len(results['errors'])}")
+        log_debug(f"CSV Import Summary - Total rows: {processed_total}, Created: {results['created']}, Updated: {results['updated']}, Skipped: {results['skipped']}, Errors: {len(results['errors'])}", service="crm")
         
         response_data = {
             "success": True,
             "message": f"Import completed: {results['created']} created, {results['updated']} updated, {results['skipped']} unchanged, {len(results['errors'])} errors",
             **results
         }
-        print(f"Returning response: {response_data}")
+        log_debug(f"Returning response: {response_data}", service="crm")
         return response_data
-        
+
     except Exception as e:
-        print(f"Error processing CSV upload: {str(e)}")
+        log_debug(f"Error processing CSV upload: {str(e)}", service="crm")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def search_crm_events_controller(user: dict, query: str) -> dict:
@@ -282,5 +283,5 @@ async def search_crm_events_controller(user: dict, query: str) -> dict:
         events = await service.search_events(school_id, query)
         return {"success": True, "results": events}
     except Exception as e:
-        print(f"Error searching CRM events: {str(e)}")
+        log_debug(f"Error searching CRM events: {str(e)}", service="crm")
         raise HTTPException(status_code=500, detail=str(e))

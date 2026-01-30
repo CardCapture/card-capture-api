@@ -2,13 +2,14 @@ import os
 import mimetypes
 import uuid
 from datetime import datetime
+from app.utils.retry_utils import log_debug
 
 def upload_to_supabase_storage_from_path(supabase_client, trimmed_path: str, user_id: str, original_filename: str) -> str:
-    print(f"[STORAGE DEBUG] === UPLOAD TO SUPABASE STORAGE ===")
-    print(f"[STORAGE DEBUG] Trimmed path: {trimmed_path}")
-    print(f"[STORAGE DEBUG] User ID: {user_id}")
-    print(f"[STORAGE DEBUG] Original filename: {original_filename}")
-    print(f"[STORAGE DEBUG] File exists: {os.path.exists(trimmed_path) if trimmed_path else 'N/A'}")
+    log_debug(f"[STORAGE DEBUG] === UPLOAD TO SUPABASE STORAGE ===", service="storage")
+    log_debug(f"[STORAGE DEBUG] Trimmed path: {trimmed_path}", service="storage")
+    log_debug(f"[STORAGE DEBUG] User ID: {user_id}", service="storage")
+    log_debug(f"[STORAGE DEBUG] Original filename: {original_filename}", service="storage")
+    log_debug(f"[STORAGE DEBUG] File exists: {os.path.exists(trimmed_path) if trimmed_path else 'N/A'}", service="storage")
     
     # Generate unique filename to prevent overwrites
     # Each upload gets its own unique path
@@ -16,20 +17,20 @@ def upload_to_supabase_storage_from_path(supabase_client, trimmed_path: str, use
     file_extension = os.path.splitext(original_filename)[1] or '.jpg'
     unique_filename = f"{uuid.uuid4().hex}{file_extension}"
     storage_path = f"cards-uploads/{user_id}/{today}/{unique_filename}"
-    
-    print(f"[STORAGE DEBUG] Generated storage path: {storage_path}")
+
+    log_debug(f"[STORAGE DEBUG] Generated storage path: {storage_path}", service="storage")
     
     content_type, _ = mimetypes.guess_type(original_filename)
     if not content_type:
         content_type = 'application/octet-stream'
-    
-    print(f"[STORAGE DEBUG] Content type: {content_type}")
+
+    log_debug(f"[STORAGE DEBUG] Content type: {content_type}", service="storage")
     
     try:
         with open(trimmed_path, "rb") as f:
             trimmed_bytes = f.read()
-        
-        print(f"[STORAGE DEBUG] File size: {len(trimmed_bytes)} bytes")
+
+        log_debug(f"[STORAGE DEBUG] File size: {len(trimmed_bytes)} bytes", service="storage")
         
         # Upload the file with unique path
         res = supabase_client.storage.from_('cards-uploads').upload(
@@ -39,13 +40,13 @@ def upload_to_supabase_storage_from_path(supabase_client, trimmed_path: str, use
         )
         
         if hasattr(res, 'error') and res.error:
-            print(f"[STORAGE DEBUG] ❌ Upload error: {res.error}")
+            log_debug(f"[STORAGE DEBUG] Upload error: {res.error}", service="storage")
             raise Exception(f"Supabase Storage upload error: {res.error}")
-        
-        print(f"[STORAGE DEBUG] ✅ Upload successful")
-        print(f"[STORAGE DEBUG] Final storage path: {storage_path}")
+
+        log_debug(f"[STORAGE DEBUG] Upload successful", service="storage")
+        log_debug(f"[STORAGE DEBUG] Final storage path: {storage_path}", service="storage")
         return storage_path
-        
+
     except Exception as e:
-        print(f"[STORAGE DEBUG] ❌ Exception during upload: {str(e)}")
+        log_debug(f"[STORAGE DEBUG] Exception during upload: {str(e)}", service="storage")
         raise

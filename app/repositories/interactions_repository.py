@@ -2,6 +2,7 @@ from typing import Optional, Dict, Any
 from fastapi import HTTPException
 
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 
 
 def create_student_school_interaction(interaction_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -26,9 +27,9 @@ def create_student_school_interaction(interaction_data: Dict[str, Any]) -> Dict[
         error_msg = str(e)
 
         # Log the full error and payload for debugging
-        print(f"[INTERACTION ERROR] Failed to create interaction")
-        print(f"[INTERACTION ERROR] Error: {error_msg}")
-        print(f"[INTERACTION ERROR] Payload: {json.dumps(interaction_data, indent=2, default=str)}")
+        log_debug(f"[INTERACTION ERROR] Failed to create interaction", service="interactions")
+        log_debug(f"[INTERACTION ERROR] Error: {error_msg}", service="interactions")
+        log_debug(f"[INTERACTION ERROR] Payload: {json.dumps(interaction_data, indent=2, default=str)}", service="interactions")
 
         # Check for duplicate scan (UNIQUE constraint violation)
         if "duplicate key value violates unique constraint" in error_msg.lower():

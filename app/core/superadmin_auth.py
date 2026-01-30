@@ -4,11 +4,12 @@ from jose import JWTError, jwt
 import os
 import logging
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 
 security = HTTPBearer()
 
 def log(msg):
-    print(f"[superadmin_auth] {msg}")
+    log_debug(f"[superadmin_auth] {msg}", service="auth")
 
 async def verify_superadmin(token: str = Depends(security)):
     """Verify JWT token and check if user is SuperAdmin"""

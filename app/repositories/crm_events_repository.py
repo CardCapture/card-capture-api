@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 
 class CRMEventsRepository:
     def __init__(self):
@@ -12,7 +13,7 @@ class CRMEventsRepository:
             response = self.client.table(self.table).select("*").eq("school_id", school_id).order("event_date").execute()
             return response.data
         except Exception as e:
-            print(f"Error listing CRM events: {str(e)}")
+            log_debug(f"Error listing CRM events: {str(e)}", service="crm")
             raise
     
     async def create_event(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -21,7 +22,7 @@ class CRMEventsRepository:
             response = self.client.table(self.table).insert(event_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
-            print(f"Error creating CRM event: {str(e)}")
+            log_debug(f"Error creating CRM event: {str(e)}", service="crm")
             # Check if it's a unique constraint violation
             if "unique_crm_event_per_school" in str(e):
                 raise ValueError("An event with this CRM ID already exists for your school")
@@ -33,7 +34,7 @@ class CRMEventsRepository:
             response = self.client.table(self.table).select("*").eq("id", event_id).eq("school_id", school_id).execute()
             return response.data[0] if response.data else None
         except Exception as e:
-            print(f"Error getting CRM event: {str(e)}")
+            log_debug(f"Error getting CRM event: {str(e)}", service="crm")
             raise
     
     async def update_event(self, event_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -47,7 +48,7 @@ class CRMEventsRepository:
             response = self.client.table(self.table).update(updates).eq("id", event_id).execute()
             return response.data[0] if response.data else None
         except Exception as e:
-            print(f"Error updating CRM event: {str(e)}")
+            log_debug(f"Error updating CRM event: {str(e)}", service="crm")
             if "unique_crm_event_per_school" in str(e):
                 raise ValueError("An event with this CRM ID already exists for your school")
             raise
@@ -57,7 +58,7 @@ class CRMEventsRepository:
         try:
             self.client.table(self.table).delete().eq("id", event_id).execute()
         except Exception as e:
-            print(f"Error deleting CRM event: {str(e)}")
+            log_debug(f"Error deleting CRM event: {str(e)}", service="crm")
             raise
     
     async def bulk_delete_events(self, event_ids: List[str], school_id: str) -> int:
@@ -66,7 +67,7 @@ class CRMEventsRepository:
             response = self.client.table(self.table).delete().in_("id", event_ids).eq("school_id", school_id).execute()
             return len(response.data) if response.data else 0
         except Exception as e:
-            print(f"Error bulk deleting CRM events: {str(e)}")
+            log_debug(f"Error bulk deleting CRM events: {str(e)}", service="crm")
             raise
     
     async def get_event_by_crm_id(self, school_id: str, crm_event_id: str) -> Optional[Dict[str, Any]]:
@@ -75,7 +76,7 @@ class CRMEventsRepository:
             response = self.client.table(self.table).select("*").eq("school_id", school_id).eq("crm_event_id", crm_event_id).execute()
             return response.data[0] if response.data else None
         except Exception as e:
-            print(f"Error getting CRM event by CRM ID: {str(e)}")
+            log_debug(f"Error getting CRM event by CRM ID: {str(e)}", service="crm")
             raise
     
     async def search_events(self, school_id: str, query: str) -> List[Dict[str, Any]]:
@@ -85,22 +86,22 @@ class CRMEventsRepository:
             response = self.client.table(self.table).select("*").eq("school_id", school_id).or_(f"name.ilike.%{query}%,crm_event_id.ilike.%{query}%").limit(10).execute()
             return response.data
         except Exception as e:
-            print(f"Error searching CRM events: {str(e)}")
+            log_debug(f"Error searching CRM events: {str(e)}", service="crm")
             raise
     
     async def bulk_upsert_events(self, events_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Bulk create/update events using upsert"""
         try:
-            print(f"🔄 Upserting {len(events_data)} events...")
-            
+            log_debug(f"Upserting {len(events_data)} events...", service="crm")
+
             # Use Supabase upsert with on_conflict for the unique constraint
             response = self.client.table(self.table).upsert(
                 events_data,
                 on_conflict="school_id,crm_event_id"  # Match the unique constraint
             ).execute()
-            
-            print(f"✅ Upserted {len(response.data)} events")
+
+            log_debug(f"Upserted {len(response.data)} events", service="crm")
             return response.data
         except Exception as e:
-            print(f"❌ Error bulk upserting CRM events: {str(e)}")
+            log_debug(f"Error bulk upserting CRM events: {str(e)}", service="crm")
             raise

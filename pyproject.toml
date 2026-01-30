@@ -1,0 +1,22 @@
+[tool.ruff]
+# Ruff configuration for CardCapture API
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "T201",   # print statements - use log_debug() instead
+    "T203",   # pprint statements
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Allow print in retry_utils.py (it's our logger implementation)
+"app/utils/retry_utils.py" = ["T201", "T203"]
+# Allow print in tests for debugging
+"tests/**/*.py" = ["T201", "T203"]

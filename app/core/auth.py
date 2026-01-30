@@ -3,9 +3,10 @@ from jose import jwt, JWTError
 import os
 from app.repositories.auth_repository import get_user_profile_db
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 
 def log(msg):
-    print(f"[auth] {msg}")
+    log_debug(f"[auth] {msg}", service="auth")
 
 async def get_current_user(request: Request):
     auth_header = request.headers.get("Authorization")

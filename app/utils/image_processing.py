@@ -15,6 +15,7 @@ from google.cloud import documentai_v1 as documentai
 
 # Import configuration
 from app.config import PROJECT_ID, DOCAI_LOCATION, DOCAI_PROCESSOR_ID, TRIMMED_FOLDER
+from app.utils.retry_utils import log_debug
 
 # Import PhotoRoom service
 try:
@@ -22,20 +23,20 @@ try:
     PHOTOROOM_AVAILABLE = True
 except ImportError:
     PHOTOROOM_AVAILABLE = False
-    print("[WARNING] PhotoRoom service not available, using fallback methods only")
+    log_debug("[WARNING] PhotoRoom service not available, using fallback methods only", service="image_processing")
 
 # Register HEIF opener if available
 try:
     import pillow_heif
     pillow_heif.register_heif_opener()
     HEIC_SUPPORT = True
-    print("[INFO] HEIC support enabled")
+    log_debug("[INFO] HEIC support enabled", service="image_processing")
 except ImportError:
     HEIC_SUPPORT = False
-    print("[WARNING] HEIC support not available - pillow_heif not installed")
+    log_debug("[WARNING] HEIC support not available - pillow_heif not installed", service="image_processing")
 except Exception as e:
     HEIC_SUPPORT = False
-    print(f"[WARNING] HEIC support failed to initialize: {e}")
+    log_debug(f"[WARNING] HEIC support failed to initialize: {e}", service="image_processing")
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def ensure_proper_orientation(image_path: str) -> str:
         # Check if HEIC and convert if needed
         file_ext = Path(image_path).suffix.lower()
         if file_ext in ['.heic', '.heif'] and HEIC_SUPPORT:
-            print(f"[Orientation] Converting HEIC file: {image_path}")
+            log_debug(f"[Orientation] Converting HEIC file: {image_path}", service="image_processing")
             img = Image.open(image_path)
             img = ImageOps.exif_transpose(img)
             
@@ -64,7 +65,7 @@ def ensure_proper_orientation(image_path: str) -> str:
             base_path, _ = os.path.splitext(image_path)
             processed_path = f"{base_path}_processed.jpg"
             img.save(processed_path, format='JPEG', quality=95, optimize=True)
-            print(f"[Orientation] HEIC converted to: {processed_path}")
+            log_debug(f"[Orientation] HEIC converted to: {processed_path}", service="image_processing")
             return processed_path
         
         # Regular image processing
@@ -72,16 +73,16 @@ def ensure_proper_orientation(image_path: str) -> str:
         
         # This handles EXIF orientation automatically
         img = ImageOps.exif_transpose(img)
-        print(f"✅ EXIF orientation applied successfully")
+        log_debug(f"EXIF orientation applied successfully", service="image_processing")
         
         # Check aspect ratio for logging
         aspect_ratio = img.width / img.height
         if aspect_ratio > 1.5:
-            print(f"📐 Detected horizontal card format (aspect ratio: {aspect_ratio:.2f})")
+            log_debug(f"Detected horizontal card format (aspect ratio: {aspect_ratio:.2f})", service="image_processing")
         elif aspect_ratio < 0.7:
-            print(f"📐 Detected vertical card format (aspect ratio: {aspect_ratio:.2f})")
+            log_debug(f"Detected vertical card format (aspect ratio: {aspect_ratio:.2f})", service="image_processing")
         else:
-            print(f"📐 Square/ambiguous format (aspect ratio: {aspect_ratio:.2f})")
+            log_debug(f"Square/ambiguous format (aspect ratio: {aspect_ratio:.2f})", service="image_processing")
         
         # Convert to RGB if needed
         if img.mode in ('RGBA', 'LA', 'P'):
@@ -91,12 +92,12 @@ def ensure_proper_orientation(image_path: str) -> str:
         base_path, ext = os.path.splitext(image_path)
         processed_path = f"{base_path}_processed{ext}"
         img.save(processed_path, format='JPEG', quality=100, optimize=True)
-        print(f"✅ Processed image saved to: {processed_path}")
+        log_debug(f"Processed image saved to: {processed_path}", service="image_processing")
         
         return processed_path
         
     except Exception as e:
-        print(f"[Orientation] Error: {e}")
+        log_debug(f"[Orientation] Error: {e}", service="image_processing")
         return image_path
 
 
@@ -136,7 +137,7 @@ def detect_card_boundaries(image_path: str, padding: int = 20, white_threshold: 
                         largest_component = max(valid_components, key=lambda x: x[1])[0]
                         card_mask = labeled_array == largest_component
                     else:
-                        print("[CardBoundary] No large enough components found")
+                        log_debug("[CardBoundary] No large enough components found", service="image_processing")
                         card_mask = potential_card
                 else:
                     card_mask = potential_card
@@ -149,16 +150,16 @@ def detect_card_boundaries(image_path: str, padding: int = 20, white_threshold: 
         
         rows = np.any(card_mask, axis=1)
         cols = np.any(card_mask, axis=0)
-        
+
         if not np.any(rows) or not np.any(cols):
-            print("[CardBoundary] No card detected - trying fallback")
+            log_debug("[CardBoundary] No card detected - trying fallback", service="image_processing")
             img_gray = np.array(img.convert('L'))
             non_white = img_gray < (white_threshold - 50)
             rows = np.any(non_white, axis=1)
             cols = np.any(non_white, axis=0)
-            
+
             if not np.any(rows) or not np.any(cols):
-                print("[CardBoundary] Fallback also failed")
+                log_debug("[CardBoundary] Fallback also failed", service="image_processing")
                 return None
         
         top, bottom = np.where(rows)[0][[0, -1]]
@@ -169,13 +170,13 @@ def detect_card_boundaries(image_path: str, padding: int = 20, white_threshold: 
         top = max(0, top - safe_padding)
         right = min(img.width, right + safe_padding)
         bottom = min(img.height, bottom + safe_padding)
-        
-        print(f"[CardBoundary] Detected: ({left}, {top}) to ({right}, {bottom})")
-        
+
+        log_debug(f"[CardBoundary] Detected: ({left}, {top}) to ({right}, {bottom})", service="image_processing")
+
         return (left, top, right, bottom)
         
     except Exception as e:
-        print(f"[CardBoundary] Error: {e}")
+        log_debug(f"[CardBoundary] Error: {e}", service="image_processing")
         return None
 
 
@@ -218,7 +219,7 @@ def trim_image_with_docai(input_path: str, output_path: str = None, percent_expa
                             all_vertices.append((v.x, v.y))
         
         if not all_vertices:
-            print("[DocAI] No bounding box vertices found")
+            log_debug("[DocAI] No bounding box vertices found", service="image_processing")
             return input_path
         
         xs, ys = zip(*all_vertices)
@@ -238,11 +239,11 @@ def trim_image_with_docai(input_path: str, output_path: str = None, percent_expa
         cropped_img = img.crop((left, top, right, bottom))
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         cropped_img.save(output_path)
-        print(f"[DocAI] Cropped image saved to {output_path}")
+        log_debug(f"[DocAI] Cropped image saved to {output_path}", service="image_processing")
         return output_path
-        
+
     except Exception as e:
-        print(f"[DocAI] Error: {e}")
+        log_debug(f"[DocAI] Error: {e}", service="image_processing")
         return input_path
 
 
@@ -261,13 +262,13 @@ def trim_image_with_boundary_detection(input_path: str, output_path: str = None,
             output_path = os.path.join(TRIMMED_FOLDER, f"{name}_trimmed{ext}")
         
         boundaries = detect_card_boundaries(working_path, white_threshold=white_threshold, use_color_detection=True)
-        
+
         if not boundaries:
-            print("[CardBoundary] Color detection failed, trying grayscale...")
+            log_debug("[CardBoundary] Color detection failed, trying grayscale...", service="image_processing")
             boundaries = detect_card_boundaries(working_path, white_threshold=white_threshold-30, use_color_detection=False)
-        
+
         if not boundaries:
-            print("[CardBoundary] All boundary detection failed")
+            log_debug("[CardBoundary] All boundary detection failed", service="image_processing")
             return input_path
         
         img = Image.open(working_path)
@@ -276,12 +277,12 @@ def trim_image_with_boundary_detection(input_path: str, output_path: str = None,
         
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         cropped_img.save(output_path, format='JPEG', quality=100, optimize=True)
-        
-        print(f"[CardBoundary] Cropped image saved to {output_path}")
+
+        log_debug(f"[CardBoundary] Cropped image saved to {output_path}", service="image_processing")
         return output_path
-        
+
     except Exception as e:
-        print(f"[CardBoundary] Error: {e}")
+        log_debug(f"[CardBoundary] Error: {e}", service="image_processing")
         return input_path
 
 
@@ -291,11 +292,11 @@ def process_with_photoroom(image_path: str, output_dir: Optional[str] = None) ->
     Returns path to processed image or None if failed
     """
     if not USE_PHOTOROOM:
-        print("[PhotoRoom] Disabled via feature flag")
+        log_debug("[PhotoRoom] Disabled via feature flag", service="image_processing")
         return None
-    
+
     try:
-        print(f"[PhotoRoom] Processing image: {image_path}")
+        log_debug(f"[PhotoRoom] Processing image: {image_path}", service="image_processing")
         photoroom_service = get_photoroom_service()
         
         # Use TRIMMED_FOLDER as output directory if not specified
@@ -312,14 +313,14 @@ def process_with_photoroom(image_path: str, output_dir: Optional[str] = None) ->
         if result['success']:
             # Return white background version (production default)
             processed_path = result['white_bg_path']
-            print(f"[PhotoRoom] Success! Processed image: {processed_path}")
+            log_debug(f"[PhotoRoom] Success! Processed image: {processed_path}", service="image_processing")
             return processed_path
         else:
-            print(f"[PhotoRoom] Failed: {result.get('message')}")
+            log_debug(f"[PhotoRoom] Failed: {result.get('message')}", service="image_processing")
             return None
-            
+
     except Exception as e:
-        print(f"[PhotoRoom] Error: {e}")
+        log_debug(f"[PhotoRoom] Error: {e}", service="image_processing")
         return None
 
 
@@ -328,7 +329,7 @@ def ensure_trimmed_image(original_image_path: str) -> str:
     Main entry point - maintains backwards compatibility
     Enhanced with PhotoRoom support
     """
-    print(f"🔄 Processing image: {original_image_path}")
+    log_debug(f"Processing image: {original_image_path}", service="image_processing")
     
     try:
         # Step 1: Ensure proper orientation (handles HEIC conversion)
@@ -336,12 +337,12 @@ def ensure_trimmed_image(original_image_path: str) -> str:
         
         # Step 2: Try PhotoRoom first (if enabled)
         if USE_PHOTOROOM:
-            print(f"🎨 Attempting PhotoRoom background removal...")
+            log_debug(f"Attempting PhotoRoom background removal...", service="image_processing")
             photoroom_result = process_with_photoroom(processed_path)
 
             if photoroom_result and os.path.exists(photoroom_result):
                 # Validate that PhotoRoom actually changed the image
-                print(f"🔍 Validating PhotoRoom results...")
+                log_debug(f"Validating PhotoRoom results...", service="image_processing")
 
                 try:
                     from PIL import Image
@@ -359,42 +360,42 @@ def ensure_trimmed_image(original_image_path: str) -> str:
                         # Calculate average pixel difference
                         pixel_diff = np.mean(np.abs(orig_array.astype(float) - photo_array.astype(float)))
 
-                        print(f"📊 PhotoRoom pixel difference: {pixel_diff:.2f}")
+                        log_debug(f"PhotoRoom pixel difference: {pixel_diff:.2f}", service="image_processing")
 
                         if pixel_diff < 5.0:  # Very similar images
-                            print(f"⚠️ PhotoRoom didn't significantly change the image (diff: {pixel_diff:.2f}), falling back to boundary detection")
+                            log_debug(f"PhotoRoom didn't significantly change the image (diff: {pixel_diff:.2f}), falling back to boundary detection", service="image_processing")
                         else:
-                            print(f"✅ PhotoRoom processing successful (diff: {pixel_diff:.2f})")
+                            log_debug(f"PhotoRoom processing successful (diff: {pixel_diff:.2f})", service="image_processing")
                             return photoroom_result
                     else:
                         # Different sizes - PhotoRoom likely worked
-                        print(f"✅ PhotoRoom changed dimensions from {original_img.size} to {photoroom_img.size}")
+                        log_debug(f"PhotoRoom changed dimensions from {original_img.size} to {photoroom_img.size}", service="image_processing")
                         return photoroom_result
 
                 except Exception as validation_error:
-                    print(f"⚠️ PhotoRoom validation failed: {validation_error}, falling back to boundary detection")
+                    log_debug(f"PhotoRoom validation failed: {validation_error}, falling back to boundary detection", service="image_processing")
             else:
-                print(f"⚠️ PhotoRoom failed or unavailable, falling back to boundary detection")
+                log_debug(f"PhotoRoom failed or unavailable, falling back to boundary detection", service="image_processing")
         
         # Step 3: Fall back to boundary detection
-        print(f"🎯 Attempting card boundary detection...")
+        log_debug(f"Attempting card boundary detection...", service="image_processing")
         trimmed_path = trim_image_with_boundary_detection(processed_path, white_threshold=250)
         
         if trimmed_path == processed_path:
-            print(f"⚠️ Initial boundary detection failed, trying conservative threshold...")
+            log_debug(f"Initial boundary detection failed, trying conservative threshold...", service="image_processing")
             trimmed_path = trim_image_with_boundary_detection(processed_path, white_threshold=252)
-            
+
             if trimmed_path == processed_path:
-                print(f"⚠️ Boundary detection failed, falling back to DocAI...")
+                log_debug(f"Boundary detection failed, falling back to DocAI...", service="image_processing")
                 trimmed_path = trim_image_with_docai(processed_path, percent_expand=0.80)
-                
+
                 if trimmed_path == processed_path:
-                    print(f"⚠️ All trimming methods failed, returning processed image")
+                    log_debug(f"All trimming methods failed, returning processed image", service="image_processing")
                     return processed_path
         
         # Verify the trimmed file exists
         if not os.path.exists(trimmed_path):
-            print(f"⚠️ Trimmed image not found at: {trimmed_path}")
+            log_debug(f"Trimmed image not found at: {trimmed_path}", service="image_processing")
             return processed_path
         
         # Ensure high quality output
@@ -404,11 +405,11 @@ def ensure_trimmed_image(original_image_path: str) -> str:
         
         jpeg_path = os.path.splitext(trimmed_path)[0] + '.jpg'
         output_img.save(jpeg_path, format='JPEG', quality=100, optimize=True)
-        print(f"✅ Image processed and saved at: {jpeg_path}")
+        log_debug(f"Image processed and saved at: {jpeg_path}", service="image_processing")
         return jpeg_path
-        
+
     except Exception as e:
-        print(f"❌ Error processing image: {e}")
+        log_debug(f"Error processing image: {e}", service="image_processing")
         import traceback
         traceback.print_exc()
         return original_image_path

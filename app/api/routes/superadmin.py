@@ -9,11 +9,12 @@ from app.models.superadmin import SchoolCreate, SchoolResponse, SuperAdminCheck,
 from app.core.superadmin_auth import verify_superadmin
 from app.core.clients import get_supabase_client
 from app.controllers.users_controller import invite_user_controller
+from app.utils.retry_utils import log_debug
 
 router = APIRouter(prefix="/superadmin", tags=["SuperAdmin"])
 
 def log(msg):
-    print(f"[superadmin] {msg}")
+    log_debug(f"[superadmin] {msg}", service="superadmin")
 
 @router.get("/health")
 async def superadmin_health():

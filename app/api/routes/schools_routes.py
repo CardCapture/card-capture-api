@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Body
 from app.controllers.schools_controller import get_school_controller
 from app.core.auth import get_current_user
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional
 import json
@@ -40,25 +41,25 @@ async def update_school_card_fields(school_id: str, payload: Dict[str, Any] = Bo
             "id": school_id,
             "card_fields": card_fields
         }
-        
-        print(f"[Card Fields Update] Updating school {school_id} with card_fields:")
-        print(json.dumps(card_fields, indent=2))
+
+        log_debug(f"[Card Fields Update] Updating school {school_id} with card_fields:", service="schools")
+        log_debug(json.dumps(card_fields, indent=2), service="schools")
         
         response = supabase_client.table("schools").update(update_payload).eq("id", school_id).execute()
         
         if response.data:
-            print(f"✅ Successfully updated card_fields for school {school_id}")
+            log_debug(f"Successfully updated card_fields for school {school_id}", service="schools")
             return JSONResponse(status_code=200, content={
                 "message": "Card fields updated successfully",
                 "school_id": school_id,
                 "card_fields": card_fields
             })
         else:
-            print(f"❌ Failed to update card_fields for school {school_id}")
+            log_debug(f"Failed to update card_fields for school {school_id}", service="schools")
             return JSONResponse(status_code=500, content={"error": "Failed to update card fields."})
 
     except Exception as e:
-        print(f"❌ Error updating card fields for school {school_id}: {e}")
+        log_debug(f"Error updating card fields for school {school_id}: {e}", service="schools")
         return JSONResponse(status_code=500, content={"error": "Failed to update card fields."})
 
 @router.get("/schools/{school_id}/notification-settings")
@@ -89,7 +90,7 @@ async def get_notification_settings(school_id: str, user=Depends(get_current_use
         })
 
     except Exception as e:
-        print(f"❌ Error getting notification settings for school {school_id}: {e}")
+        log_debug(f"Error getting notification settings for school {school_id}: {e}", service="schools")
         return JSONResponse(status_code=500, content={"error": "Failed to get notification settings."})
 
 @router.put("/schools/{school_id}/notification-settings")
@@ -145,23 +146,23 @@ async def update_notification_settings(
         if not update_payload:
             return JSONResponse(status_code=400, content={"error": "No valid fields to update."})
 
-        print(f"[Notification Settings Update] Updating school {school_id} with settings:")
-        print(json.dumps(update_payload, indent=2))
+        log_debug(f"[Notification Settings Update] Updating school {school_id} with settings:", service="schools")
+        log_debug(json.dumps(update_payload, indent=2), service="schools")
 
         # Update the school record
         response = supabase_client.table("schools").update(update_payload).eq("id", school_id).execute()
 
         if response.data:
-            print(f"✅ Successfully updated notification settings for school {school_id}")
+            log_debug(f"Successfully updated notification settings for school {school_id}", service="schools")
             return JSONResponse(status_code=200, content={
                 "message": "Notification settings updated successfully",
                 "school_id": school_id,
                 **update_payload
             })
         else:
-            print(f"❌ Failed to update notification settings for school {school_id}")
+            log_debug(f"Failed to update notification settings for school {school_id}", service="schools")
             return JSONResponse(status_code=500, content={"error": "Failed to update notification settings."})
 
     except Exception as e:
-        print(f"❌ Error updating notification settings for school {school_id}: {e}")
+        log_debug(f"Error updating notification settings for school {school_id}: {e}", service="schools")
         return JSONResponse(status_code=500, content={"error": "Failed to update notification settings."}) 

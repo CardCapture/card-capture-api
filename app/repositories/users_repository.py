@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 import re
 from typing import List
 import os
@@ -31,7 +32,7 @@ def list_users_db(supabase_client):
 
 def invite_user_db(email: str, first_name: str, last_name: str, role: List[str], school_id: str):
     """Invite a new user to the system using magic links"""
-    print(f"📧 Inviting user: {email} to school: {school_id}")
+    log_debug(f"Inviting user to school: {school_id}", service="users")
     
     # Import magic link function
     from app.repositories.auth_repository import send_magic_link_email_db
@@ -85,7 +86,7 @@ def invite_user_db(email: str, first_name: str, last_name: str, role: List[str],
             }
         else:
             # User exists, update their profile
-            print(f"🔄 Updating existing user profile for {existing_user.id}")
+            log_debug(f"Updating existing user profile for {existing_user.id}", service="users")
             
             # Update app_metadata
             get_supabase_client().auth.admin.update_user_by_id(
@@ -109,7 +110,7 @@ def invite_user_db(email: str, first_name: str, last_name: str, role: List[str],
             
             # Use upsert to handle potential conflicts
             get_supabase_client().table("profiles").upsert(profile_data).execute()
-            print(f"✅ User profile updated successfully")
+            log_debug(f"User profile updated successfully", service="users")
             
             # Format the return value properly
             user_data = {
@@ -125,13 +126,13 @@ def invite_user_db(email: str, first_name: str, last_name: str, role: List[str],
                 "magic_link_token": magic_link_response.get("token", "")[:8] + "..."
             }
             
-        print(f"✅ Magic link invitation sent to: {email}")
+        log_debug(f"Magic link invitation sent successfully", service="users")
         return user_data
-        
+
     except Exception as e:
-        print(f"❌ Error inviting user: {str(e)}")
+        log_debug(f"Error inviting user: {str(e)}", service="users")
         import traceback
-        print(f"❌ Stack trace: {traceback.format_exc()}")
+        log_debug(f"Stack trace: {traceback.format_exc()}", service="users")
         raise Exception(f"Error inviting user: {str(e)}")
 
 def update_user_db(supabase_client, user_id, update):

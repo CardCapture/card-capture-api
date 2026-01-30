@@ -45,16 +45,16 @@ STALE_JOB_MINUTES = 5
 @app.on_event("startup")
 async def startup_event():
     """Log when the app starts up"""
-    print("🚀 CardCapture Worker API V3 (Race Condition Fixed) is starting up...", flush=True)
-    print(f"🌐 Environment: PORT={os.environ.get('PORT', 'NOT_SET')}", flush=True)
+    log_debug("CardCapture Worker API V3 (Race Condition Fixed) is starting up...", service="worker")
+    log_debug(f"Environment: PORT={os.environ.get('PORT', 'NOT_SET')}", service="worker")
     try:
         from app.core.clients import get_supabase_client
         supabase_client = get_supabase_client()
-        print("✅ Supabase client imported and initialized successfully", flush=True)
-        print("✅ New pipeline system loaded with race condition fixes", flush=True)
-        print("✅ CardCapture Worker API V3 (Fixed) startup complete", flush=True)
+        log_debug("Supabase client imported and initialized successfully", service="worker")
+        log_debug("New pipeline system loaded with race condition fixes", service="worker")
+        log_debug("CardCapture Worker API V3 (Fixed) startup complete", service="worker")
     except Exception as e:
-        print(f"⚠️ Startup dependency check failed (continuing): {e}", flush=True)
+        log_debug(f"Startup dependency check failed (continuing): {e}", service="worker")
 
 
 @app.get("/")

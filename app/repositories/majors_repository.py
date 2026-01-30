@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Optional
 import re
 from app.core.clients import get_supabase_client
+from app.utils.retry_utils import log_debug
 
 class MajorsRepository:
     def __init__(self):
@@ -165,9 +166,9 @@ class MajorsRepository:
             # Sort by priority and then alphabetically, limit to requested amount
             processed_results.sort(key=lambda x: (-x['search_priority'], x['display_name']))
             return processed_results[:limit]
-            
+
         except Exception as e:
-            print(f"Error searching majors: {str(e)}")
+            log_debug(f"Error searching majors: {str(e)}", service="majors")
             raise
     
     async def get_major_by_id(self, major_id: str) -> Optional[Dict[str, Any]]:
@@ -176,7 +177,7 @@ class MajorsRepository:
             response = self.client.table(self.table).select("*").eq("id", major_id).execute()
             return response.data[0] if response.data else None
         except Exception as e:
-            print(f"Error getting major by ID: {str(e)}")
+            log_debug(f"Error getting major by ID: {str(e)}", service="majors")
             raise
     
     async def get_major_by_cip_code(self, cip_code: str) -> Optional[Dict[str, Any]]:
@@ -185,7 +186,7 @@ class MajorsRepository:
             response = self.client.table(self.table).select("*").eq("cip_code", cip_code).execute()
             return response.data[0] if response.data else None
         except Exception as e:
-            print(f"Error getting major by CIP code: {str(e)}")
+            log_debug(f"Error getting major by CIP code: {str(e)}", service="majors")
             raise
     
     async def get_majors_by_family(self, cip_family: str, limit: int = 50) -> List[Dict[str, Any]]:
@@ -196,7 +197,7 @@ class MajorsRepository:
             ).eq("cip_family", cip_family).limit(limit).order("cip_title").execute()
             return response.data
         except Exception as e:
-            print(f"Error getting majors by family: {str(e)}")
+            log_debug(f"Error getting majors by family: {str(e)}", service="majors")
             raise
     
     async def get_major_count(self) -> int:
@@ -205,5 +206,5 @@ class MajorsRepository:
             response = self.client.table(self.table).select("count", count="exact").execute()
             return response.count
         except Exception as e:
-            print(f"Error getting major count: {str(e)}")
+            log_debug(f"Error getting major count: {str(e)}", service="majors")
             return 0

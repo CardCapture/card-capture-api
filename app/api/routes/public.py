@@ -6,6 +6,7 @@ No authentication required.
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, Dict, Any
 
+from app.utils.retry_utils import log_debug
 from app.models.recruiter_signup import (
     RecruiterSignupRequest,
     RecruiterSignupResponse,
@@ -53,7 +54,7 @@ async def _send_post_purchase_emails(
 
         profile = profile_response.data
         if not profile:
-            print(f"[post_purchase_emails] Profile not found for user {user_id}")
+            log_debug(f"[post_purchase_emails] Profile not found for user {user_id}", service="public")
             return
 
         recipient_email = profile.get("email")
@@ -75,7 +76,7 @@ async def _send_post_purchase_emails(
             checkout_session_id=checkout_session_id,
             purchase_date=purchase_date
         )
-        print(f"[post_purchase_emails] Receipt email result: {receipt_result}")
+        log_debug(f"[post_purchase_emails] Receipt email result: {receipt_result}", service="public")
 
         # 2. Send invite admins email only if user created a new school (not standalone)
         if account_status != "standalone" and school_id:
@@ -94,11 +95,11 @@ async def _send_post_purchase_emails(
                 recipient_name=recipient_name,
                 school_name=school_name
             )
-            print(f"[post_purchase_emails] Invite admins email result: {invite_result}")
+            log_debug(f"[post_purchase_emails] Invite admins email result: {invite_result}", service="public")
 
     except Exception as e:
         # Don't fail the payment verification if emails fail
-        print(f"[post_purchase_emails] Error sending emails: {str(e)}")
+        log_debug(f"[post_purchase_emails] Error sending emails: {str(e)}", service="public")
 
 
 async def _handle_account_linking_inline(
@@ -127,7 +128,7 @@ async def _handle_account_linking_inline(
 
         profile = profile_response.data
         if not profile:
-            print(f"[account_linking] Profile not found for user {user_id}")
+            log_debug(f"[account_linking] Profile not found for user {user_id}", service="public")
             return
 
         parent_school_id = profile.get("parent_school_id")
@@ -135,10 +136,10 @@ async def _handle_account_linking_inline(
 
         # Only create link request if user selected an existing school
         if not parent_school_id or account_status != "standalone":
-            print(f"[account_linking] User {user_id} does not need account linking (parent_school_id={parent_school_id}, status={account_status})")
+            log_debug(f"[account_linking] User {user_id} does not need account linking (parent_school_id={parent_school_id}, status={account_status})", service="public")
             return
 
-        print(f"[account_linking] Creating account link request for user {user_id} to school {parent_school_id}")
+        log_debug(f"[account_linking] Creating account link request for user {user_id} to school {parent_school_id}", service="public")
 
         # Get target school details
         school_response = (
@@ -151,7 +152,7 @@ async def _handle_account_linking_inline(
 
         school = school_response.data
         if not school:
-            print(f"[account_linking] Target school {parent_school_id} not found")
+            log_debug(f"[account_linking] Target school {parent_school_id} not found", service="public")
             return
 
         # Create account link request
@@ -159,7 +160,7 @@ async def _handle_account_linking_inline(
 
         # Check if request already exists
         if link_repo.has_pending_request(user_id, parent_school_id):
-            print(f"[account_linking] Link request already exists for user {user_id} to school {parent_school_id}")
+            log_debug(f"[account_linking] Link request already exists for user {user_id} to school {parent_school_id}", service="public")
             return
 
         # Use first event for the link request record (the email will show all events)
@@ -171,7 +172,7 @@ async def _handle_account_linking_inline(
             event_purchase_id=first_purchase_id
         )
 
-        print(f"[account_linking] Created link request {link_request.get('id')}")
+        log_debug(f"[account_linking] Created link request {link_request.get('id')}", service="public")
 
         # Send notification emails to school admins
         notification_service = NotificationService()
@@ -192,11 +193,11 @@ async def _handle_account_linking_inline(
             request_id=link_request.get("id")
         )
 
-        print(f"[account_linking] Admin notification result: {email_result}")
+        log_debug(f"[account_linking] Admin notification result: {email_result}", service="public")
 
     except Exception as e:
         # Don't fail the payment if linking fails - just log it
-        print(f"[account_linking] Error handling account linking: {str(e)}")
+        log_debug(f"[account_linking] Error handling account linking: {str(e)}", service="public")
 
 
 @router.get("/schools", response_model=SchoolListResponse)
