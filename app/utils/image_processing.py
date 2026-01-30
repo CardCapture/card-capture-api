@@ -409,9 +409,8 @@ def ensure_trimmed_image(original_image_path: str) -> str:
         return jpeg_path
 
     except Exception as e:
-        log_debug(f"Error processing image: {e}", service="image_processing")
         import traceback
-        traceback.print_exc()
+        log_debug(f"Error processing image: {e}", data={"traceback": traceback.format_exc()}, service="image_processing")
         return original_image_path
 
 
