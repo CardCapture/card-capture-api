@@ -128,7 +128,8 @@ async def verify_event_code(
         return {
             "success": True,
             "event": code_result.get("event"),
-            "redirect": "/register/form"
+            "redirect": "/register/form",
+            "session_token": session_token
         }
         
     except HTTPException:
@@ -169,7 +170,8 @@ async def verify_magic_link(
         return {
             "success": True,
             "email": magic_link["email"],
-            "redirect": "/register/form"
+            "redirect": "/register/form",
+            "session_token": session_token
         }
         
     except HTTPException:

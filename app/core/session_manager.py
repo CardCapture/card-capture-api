@@ -134,9 +134,15 @@ class FormSessionManager:
         log_debug(f"Session cookie set (secure={is_deployed}, samesite={'none' if is_deployed else 'lax'})", service="session_manager")
     
     def get_session_from_cookie(self, request: Request) -> Optional[str]:
-        """Get session token from cookie"""
+        """Get session token from cookie or Authorization header"""
         token = request.cookies.get(self.COOKIE_NAME)
-        log_debug(f"Cookie lookup: {self.COOKIE_NAME}={token}, all_cookies={dict(request.cookies)}", service="session_manager")
+        if not token:
+            # Fallback: check Authorization header (for cross-origin/mobile where cookies are blocked)
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.startswith("Bearer "):
+                token = auth_header[7:]
+                log_debug(f"Session from Authorization header", service="session_manager")
+        log_debug(f"Cookie lookup: {self.COOKIE_NAME}={token is not None}, all_cookies={dict(request.cookies)}", service="session_manager")
         return token
     
     def clear_session_cookie(self, response: Response):
