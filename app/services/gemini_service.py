@@ -8,7 +8,6 @@ import json
 import re
 import time
 from typing import Dict, Any, Tuple, Callable
-import google.generativeai as genai
 from app.core.gemini_prompt import GEMINI_PROMPT_TEMPLATE
 from app.config import GEMINI_MODEL
 from app.utils.retry_utils import retry_with_exponential_backoff, log_debug
@@ -58,6 +57,7 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
             raise Exception("GEMINI_API_KEY not found in environment variables")
             
         log_debug("Configuring Gemini with API key...", service="gemini")
+        import google.generativeai as genai
         genai.configure(api_key=api_key)
         log_debug("Gemini configured successfully", service="gemini")
         

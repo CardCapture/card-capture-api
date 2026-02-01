@@ -11,7 +11,6 @@ import uuid
 import tempfile
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple
-import google.generativeai as genai
 from app.core.clients import get_supabase_client
 from app.utils.retry_utils import log_debug
 from app.core.signup_enhancement_prompt import build_enhancement_prompt
@@ -366,6 +365,7 @@ async def extract_signup_data_with_gemini(image_path: str, valid_majors: List[st
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
 
+        import google.generativeai as genai
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.5-pro")
 
@@ -452,6 +452,7 @@ async def extract_signup_data_first_pass(image_path: str) -> List[Dict]:
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
 
+        import google.generativeai as genai
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.0-flash-exp")  # Using latest model
 
@@ -610,6 +611,7 @@ async def _enhance_single_batch(
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
 
+        import google.generativeai as genai
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.0-flash-exp")
 
