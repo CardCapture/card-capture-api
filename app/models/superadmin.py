@@ -21,4 +21,27 @@ class InviteAdminRequest(BaseModel):
     email: str  # Using str instead of EmailStr to avoid email-validator dependency issues
     first_name: str
     last_name: str
-    school_id: str 
+    school_id: str
+
+class SchoolStats(BaseModel):
+    school_id: str
+    school_name: str
+    students: int
+    events: int
+    cards: int
+    users: int
+
+class TimeSeriesDataPoint(BaseModel):
+    date: str
+    count: int
+
+class PlatformStatsResponse(BaseModel):
+    total_students: int
+    total_schools: int
+    total_events: int
+    total_cards: int
+    total_users: int
+    students_over_time: List[TimeSeriesDataPoint]
+    events_over_time: List[TimeSeriesDataPoint]
+    cards_over_time: List[TimeSeriesDataPoint]
+    schools_breakdown: List[SchoolStats] 

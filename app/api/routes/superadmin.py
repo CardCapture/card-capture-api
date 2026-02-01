@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 import logging
 import traceback
 
-from app.models.superadmin import SchoolCreate, SchoolResponse, SuperAdminCheck, InviteAdminRequest
+from app.models.superadmin import SchoolCreate, SchoolResponse, SuperAdminCheck, InviteAdminRequest, PlatformStatsResponse, SchoolStats, TimeSeriesDataPoint
 from app.core.superadmin_auth import verify_superadmin
 from app.core.clients import get_supabase_client
 from app.controllers.users_controller import invite_user_controller
@@ -205,4 +206,121 @@ async def invite_school_admin(
         raise
     except Exception as e:
         log_debug(f"❌ Error inviting school admin: {e}", data={"traceback": traceback.format_exc()}, service="superadmin")
-        raise HTTPException(status_code=500, detail="Failed to invite school admin") 
+        raise HTTPException(status_code=500, detail="Failed to invite school admin")
+
+@router.get("/stats", response_model=PlatformStatsResponse)
+async def get_platform_stats(current_user: Dict[str, Any] = Depends(verify_superadmin)):
+    """Get aggregate platform statistics across all schools"""
+    try:
+        log(f"📊 Getting platform stats for SuperAdmin: {current_user['email']}")
+
+        supabase_client = get_supabase_client()
+
+        # Get total counts
+        schools_result = supabase_client.table("schools").select("id, name, created_at", count="exact").execute()
+        total_schools = schools_result.count or 0
+        schools_data = schools_result.data or []
+
+        students_result = supabase_client.table("students").select("id, created_at, school_id", count="exact").execute()
+        total_students = students_result.count or 0
+        students_data = students_result.data or []
+
+        events_result = supabase_client.table("events").select("id, created_at, school_id", count="exact").execute()
+        total_events = events_result.count or 0
+        events_data = events_result.data or []
+
+        # Get cards from both V1 (reviewed_data) and V2 (student_school_interactions)
+        reviewed_data_result = supabase_client.table("reviewed_data").select("id, created_at, school_id", count="exact").execute()
+        v1_cards = reviewed_data_result.count or 0
+        v1_cards_data = reviewed_data_result.data or []
+
+        # Try to get V2 cards if table exists
+        v2_cards = 0
+        v2_cards_data = []
+        try:
+            ssi_result = supabase_client.table("student_school_interactions").select("id, created_at, school_id", count="exact").execute()
+            v2_cards = ssi_result.count or 0
+            v2_cards_data = ssi_result.data or []
+        except Exception as e:
+            log(f"⚠️ student_school_interactions table not available: {e}")
+
+        total_cards = v1_cards + v2_cards
+
+        # Get total users (profiles)
+        users_result = supabase_client.table("profiles").select("id, school_id", count="exact").execute()
+        total_users = users_result.count or 0
+        users_data = users_result.data or []
+
+        # Calculate time series data (last 30 days)
+        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+
+        def aggregate_by_date(data, date_field="created_at"):
+            """Aggregate records by date"""
+            counts = defaultdict(int)
+            for record in data:
+                if record.get(date_field):
+                    try:
+                        date_str = record[date_field][:10]  # Get YYYY-MM-DD
+                        counts[date_str] += 1
+                    except (TypeError, IndexError):
+                        pass
+            # Sort by date and return last 30 days
+            sorted_dates = sorted(counts.items())
+            return [TimeSeriesDataPoint(date=d, count=c) for d, c in sorted_dates[-30:]]
+
+        students_over_time = aggregate_by_date(students_data)
+        events_over_time = aggregate_by_date(events_data)
+
+        # Combine V1 and V2 cards for time series
+        all_cards_data = v1_cards_data + v2_cards_data
+        cards_over_time = aggregate_by_date(all_cards_data)
+
+        # Calculate per-school breakdown
+        school_stats = []
+        for school in schools_data:
+            school_id = school["id"]
+            school_name = school["name"]
+
+            # Count students for this school
+            school_students = len([s for s in students_data if s.get("school_id") == school_id])
+
+            # Count events for this school
+            school_events = len([e for e in events_data if e.get("school_id") == school_id])
+
+            # Count cards for this school (V1 + V2)
+            school_v1_cards = len([c for c in v1_cards_data if c.get("school_id") == school_id])
+            school_v2_cards = len([c for c in v2_cards_data if c.get("school_id") == school_id])
+            school_cards = school_v1_cards + school_v2_cards
+
+            # Count users for this school
+            school_users = len([u for u in users_data if u.get("school_id") == school_id])
+
+            school_stats.append(SchoolStats(
+                school_id=school_id,
+                school_name=school_name,
+                students=school_students,
+                events=school_events,
+                cards=school_cards,
+                users=school_users
+            ))
+
+        # Sort by total activity (students + events + cards)
+        school_stats.sort(key=lambda x: x.students + x.events + x.cards, reverse=True)
+
+        log(f"✅ Platform stats retrieved: {total_schools} schools, {total_students} students, {total_events} events, {total_cards} cards")
+
+        return PlatformStatsResponse(
+            total_students=total_students,
+            total_schools=total_schools,
+            total_events=total_events,
+            total_cards=total_cards,
+            total_users=total_users,
+            students_over_time=students_over_time,
+            events_over_time=events_over_time,
+            cards_over_time=cards_over_time,
+            schools_breakdown=school_stats
+        )
+
+    except Exception as e:
+        log_debug(f"❌ Error fetching platform stats: {e}", data={"traceback": traceback.format_exc()}, service="superadmin")
+        raise HTTPException(status_code=500, detail="Failed to fetch platform statistics")
