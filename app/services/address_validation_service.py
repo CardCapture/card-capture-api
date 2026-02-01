@@ -7,7 +7,6 @@ import json
 from typing import Dict, Any, Optional, Tuple, Literal
 from app.core.clients import gmaps_client
 from app.utils.retry_utils import log_debug
-import google.generativeai as genai
 import os
 
 # Type definitions for validation states
@@ -55,6 +54,7 @@ def _clean_address_with_gemini(address: str, city: str = "", state: str = "", zi
             log_debug("No Gemini API key found, skipping address cleaning", service="address_validation")
             return {"address": address, "city": city, "state": state, "zip_code": zip_code}
 
+        import google.generativeai as genai
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.5-flash")
 
