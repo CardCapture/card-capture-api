@@ -15,6 +15,31 @@ def get_student_by_email(email: str) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
+def get_student_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """Fetch a student by phone (cell column). Returns first match."""
+    if not phone or not phone.strip():
+        return None
+    sb = get_supabase_client()
+    response = (
+        sb.table("students").select("*").eq("cell", phone.strip()).limit(1).execute()
+    )
+    rows = getattr(response, "data", None) or []
+    return rows[0] if rows else None
+
+
+def update_student(student_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Update a student record by ID and return the resulting row."""
+    sb = get_supabase_client()
+    response = sb.table("students").update(updates).eq("id", student_id).execute()
+    rows = getattr(response, "data", None) or []
+    if rows:
+        return rows[0]
+    # Fallback: re-fetch
+    res = sb.table("students").select("*").eq("id", student_id).limit(1).execute()
+    data = getattr(res, "data", None) or []
+    return data[0] if data else updates
+
+
 def upsert_student(student_payload: Dict[str, Any]) -> Dict[str, Any]:
     """Upsert a student record and return the resulting row.
 

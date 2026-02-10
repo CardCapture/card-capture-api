@@ -245,7 +245,8 @@ async def submit_registration(
         log_debug(f"Registration submitted: {result['student_id']}", service="registration_api")
         return result
         
-    except HTTPException:
+    except HTTPException as he:
+        log_debug(f"Registration submit rejected ({he.status_code}): {he.detail}", service="registration_api")
         raise
     except Exception as e:
         log_debug(f"Registration submission error: {str(e)}", service="registration_api")

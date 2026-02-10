@@ -8,9 +8,11 @@ from datetime import datetime, timezone
 from app.core.clients import get_supabase_client
 from app.repositories.students_repository import (
     get_student_by_email,
+    get_student_by_phone,
     upsert_student,
     create_token_for_student,
     get_student_by_token,
+    update_student,
 )
 from app.repositories.reviewed_data_repository import upsert_reviewed_data
 from app.repositories.interactions_repository import (
@@ -54,6 +56,61 @@ def _notify_student_email(email: Optional[str], qr_data_uri: str, token: str, is
         resend.Emails.send(params)
     except Exception as e:  # Do not fail registration if email provider rejects the key
         log_debug(f"Resend email send failed (non-fatal): {str(e)}", service="students")
+
+
+def _format_e164(phone: str) -> str:
+    """Normalize a phone number to E.164 format for Twilio (+1XXXXXXXXXX)."""
+    import re
+    digits = re.sub(r'\D', '', phone)
+    # If already 11 digits starting with 1, assume US country code included
+    if len(digits) == 11 and digits.startswith('1'):
+        return f"+{digits}"
+    # If 10 digits, assume US and prepend +1
+    if len(digits) == 10:
+        return f"+1{digits}"
+    # If 12+ digits starting with 1, may have double country code — strip one
+    if len(digits) >= 12 and digits.startswith('11'):
+        return f"+{digits[1:]}"
+    # Fallback: prepend + if not already there
+    return f"+{digits}" if not phone.startswith('+') else phone
+
+
+def _notify_student_sms(phone: str, token: str, is_lookup: bool) -> None:
+    """Send the student an SMS with a link to their QR manage page via Twilio."""
+    if not phone:
+        return
+    twilio_sid = os.getenv("TWILIO_SID")
+    if not twilio_sid:
+        log_debug("TWILIO_SID not set; skipping SMS", service="students")
+        return
+
+    twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    messaging_service_sid = os.getenv("TWILIO_MESSAGING_SERVICE_SID")
+    if not twilio_auth_token or not messaging_service_sid:
+        log_debug("Twilio credentials incomplete; skipping SMS", service="students")
+        return
+
+    manage_url = f"{FRONTEND_URL}/student-manage?token={token}"
+    body = (
+        "Your CardCapture QR code is ready!\n"
+        "\n"
+        f"{manage_url}\n"
+        "\n"
+        "Show this link at any college booth to share your info.\n"
+        "\n"
+        "Reply STOP to opt out."
+    )
+
+    try:
+        from twilio.rest import Client
+        client = Client(twilio_sid, twilio_auth_token)
+        client.messages.create(
+            messaging_service_sid=messaging_service_sid,
+            to=_format_e164(phone),
+            body=body,
+        )
+    except Exception as e:
+        log_debug(f"Twilio SMS send failed (non-fatal): {str(e)}", service="students")
 
 
 def _fix_two_digit_year(year: int) -> int:
@@ -219,6 +276,11 @@ async def register_student(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     _notify_student_email(student.get("email"), qr_data_uri, token, is_lookup=False)
 
+    if payload.get("permission_to_text") or payload.get("sms_opt_in"):
+        phone = student.get("cell")
+        if phone:
+            _notify_student_sms(phone, token, is_lookup=False)
+
     return {"student_id": student["id"], "token": token, "qrDataUri": qr_data_uri}
 
 
@@ -231,6 +293,38 @@ async def lookup_student(email: str) -> Dict[str, Any]:
     qr_data_uri = qr_png_data_uri(token)
     _notify_student_email(email, qr_data_uri, token, is_lookup=True)
     return {"sent": True}
+
+
+async def lookup_student_by_phone(phone: str) -> Dict[str, Any]:
+    """Re-issue a student QR via SMS if the student exists."""
+    s = get_student_by_phone(phone)
+    if not s:
+        return {"sent": False}
+    token = create_token_for_student(s["id"])
+    _notify_student_sms(phone, token, is_lookup=True)
+    return {"sent": True}
+
+
+async def get_student_profile(token: str) -> Dict[str, Any]:
+    """Fetch student data + QR data URI by token for the manage page."""
+    s = get_student_by_token(token)
+    if not s:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    qr_data_uri = qr_png_data_uri(token)
+    return {**s, "qrDataUri": qr_data_uri}
+
+
+async def update_student_profile(token: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Update student profile fields via token-based auth."""
+    s = get_student_by_token(token)
+    if not s:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    normalized = _normalize_student_payload(updates)
+    # Ensure we keep the student id
+    normalized["id"] = s["id"]
+    student = upsert_student({**s, **normalized})
+    return {"success": True, "student": student}
 
 
 async def scan_student(

@@ -9,6 +9,7 @@ from app.repositories.students_repository import get_student_by_email, upsert_st
 from app.repositories.auth_repository import create_magic_link_db, validate_magic_link_db, consume_magic_link_db
 from app.utils.retry_utils import log_debug
 from app.utils.qr_utils import qr_png_data_uri
+from app.services.students_service import _notify_student_sms
 
 
 class RegistrationService:
@@ -238,7 +239,11 @@ class RegistrationService:
         else:
             # Send verification email for unverified users (event code path)
             await self._send_verification_email(student["email"], student["id"])
-        
+
+        # Send SMS with manage link if student opted in and has a phone number
+        if form_data.get("permission_to_text") and student.get("cell"):
+            _notify_student_sms(student["cell"], token, is_lookup=False)
+
         # Log metrics
         await self._log_metric(
             funnel_step="registration_completed",
