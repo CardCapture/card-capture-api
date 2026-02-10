@@ -56,6 +56,15 @@ def _notify_student_email(email: Optional[str], qr_data_uri: str, token: str, is
         log_debug(f"Resend email send failed (non-fatal): {str(e)}", service="students")
 
 
+def _fix_two_digit_year(year: int) -> int:
+    """Convert 2-digit year to 4-digit: 0-99 → 2000s or 1900s."""
+    if 0 <= year <= 99:
+        current_year = datetime.now().year
+        cutoff = (current_year % 100) + 1
+        return year + 2000 if year < cutoff else year + 1900
+    return year
+
+
 def _parse_date_of_birth(raw: Any) -> Optional[str]:
     """Normalize incoming DOB values to YYYY-MM-DD when possible."""
     if not raw:
@@ -63,8 +72,15 @@ def _parse_date_of_birth(raw: Any) -> Optional[str]:
     s = str(raw).strip()
     # Already ISO-like
     if len(s) >= 10 and s[4] == '-' and s[7] == '-':
-        return s[:10]
-    # MM/DD/YYYY
+        try:
+            yyyy_i = int(s[:4])
+            yyyy_i = _fix_two_digit_year(yyyy_i)
+            mm_i = int(s[5:7])
+            dd_i = int(s[8:10])
+            return f"{yyyy_i:04d}-{mm_i:02d}-{dd_i:02d}"
+        except Exception:
+            return s[:10]
+    # MM/DD/YYYY or MM/DD/YY
     if '/' in s:
         parts = s.split('/')
         if len(parts) == 3 and all(parts):
@@ -73,6 +89,7 @@ def _parse_date_of_birth(raw: Any) -> Optional[str]:
                 mm_i = int(mm)
                 dd_i = int(dd)
                 yyyy_i = int(yyyy)
+                yyyy_i = _fix_two_digit_year(yyyy_i)
                 return f"{yyyy_i:04d}-{mm_i:02d}-{dd_i:02d}"
             except Exception:
                 return None
@@ -82,6 +99,16 @@ def _parse_date_of_birth(raw: Any) -> Optional[str]:
             mm_i = int(s[0:2])
             dd_i = int(s[2:4])
             yyyy_i = int(s[4:8])
+            return f"{yyyy_i:04d}-{mm_i:02d}-{dd_i:02d}"
+        except Exception:
+            return None
+    # MMDDYY (6 digits)
+    if s.isdigit() and len(s) == 6:
+        try:
+            mm_i = int(s[0:2])
+            dd_i = int(s[2:4])
+            yy_i = int(s[4:6])
+            yyyy_i = _fix_two_digit_year(yy_i)
             return f"{yyyy_i:04d}-{mm_i:02d}-{dd_i:02d}"
         except Exception:
             return None
