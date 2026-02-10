@@ -92,13 +92,9 @@ def _notify_student_sms(phone: str, token: str, is_lookup: bool) -> None:
 
     manage_url = f"{FRONTEND_URL}/student-manage?token={token}"
     body = (
-        "Your CardCapture QR code is ready!\n"
-        "\n"
+        f"Your CardCapture QR is ready! View it here:\n"
         f"{manage_url}\n"
-        "\n"
-        "Show this link at any college booth to share your info.\n"
-        "\n"
-        "Reply STOP to opt out."
+        f"Reply STOP to opt out."
     )
 
     try:
