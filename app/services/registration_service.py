@@ -30,22 +30,38 @@ class RegistrationService:
             resend.api_key = self.resend_api_key
     
     def _validate_email(self, email: str) -> bool:
-        """Validate email format and check for disposable domains"""
+        """Validate email format and check for disposable/school domains"""
         if not email:
             return False
-        
+
         # Basic email regex
         email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(email_pattern, email):
             return False
-        
+
         # Check for disposable domain
         domain = email.lower().split('@')[-1]
         if domain in self.DISPOSABLE_DOMAINS:
             log_debug(f"Blocked disposable email domain: {domain}", service="registration")
             return False
-        
+
+        # Check for school email domains
+        if self._is_school_email(domain):
+            log_debug(f"Blocked school email domain: {domain}", service="registration")
+            return False
+
         return True
+
+    def _is_school_email(self, domain: str) -> bool:
+        """Check if domain belongs to a school or university"""
+        segments = domain.split('.')
+        if 'k12' in segments:
+            return True
+        if domain.endswith('.org'):
+            return True
+        if domain.endswith('.edu'):
+            return True
+        return False
     
     def _validate_name(self, name: str) -> bool:
         """Validate name field"""
@@ -80,6 +96,9 @@ class RegistrationService:
         """
         # Validate email
         if not self._validate_email(email):
+            domain = email.lower().split('@')[-1] if '@' in email else ''
+            if self._is_school_email(domain):
+                raise HTTPException(status_code=400, detail="Please use a personal email address (Gmail, Yahoo, iCloud, etc.). School and university emails often block messages from CardCapture.")
             raise HTTPException(status_code=400, detail="Invalid or disposable email address")
 
         # Check if student already exists
