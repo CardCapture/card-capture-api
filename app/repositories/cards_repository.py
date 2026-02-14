@@ -7,7 +7,7 @@ from app.utils.db_utils import (
 
 @safe_db_operation("Get cards")
 def get_cards_db(supabase_client, event_id: Union[str, None] = None, school_id: Union[str, None] = None) -> List[Dict[str, Any]]:
-    """Get cards from both reviewed_data (V1) and student_school_interactions (V2).
+    """Get cards from reviewed_data (V1), student_school_interactions (V2), and in-progress processing_jobs.
 
     Args:
         supabase_client: The Supabase client
@@ -24,8 +24,13 @@ def get_cards_db(supabase_client, event_id: Union[str, None] = None, school_id: 
         query_v1 = query_v1.eq("school_id", school_id)
     response_v1 = query_v1.execute()
 
+    # Track document IDs from reviewed_data so we don't duplicate with processing_jobs
+    reviewed_doc_ids = set()
+
     if validate_db_response(response_v1, "Get cards from reviewed_data"):
         v1_cards = [card for card in response_v1.data if card.get("review_status") != "deleted"]
+        for card in v1_cards:
+            reviewed_doc_ids.add(card.get("document_id"))
         all_cards.extend(v1_cards)
 
     # Fetch V2 interactions from student_school_interactions
@@ -58,6 +63,34 @@ def get_cards_db(supabase_client, event_id: Union[str, None] = None, school_id: 
                     "trimmed_image_path": interaction.get("image_path"),  # Use same path for trimmed (no trimming for V2)
                 }
                 all_cards.append(card)
+
+    # Fetch in-progress processing jobs (queued/processing) that don't yet have reviewed_data
+    query_jobs = supabase_client.table("processing_jobs").select("*").in_("status", ["queued", "processing"])
+    if event_id:
+        query_jobs = query_jobs.eq("event_id", event_id)
+    if school_id:
+        query_jobs = query_jobs.eq("school_id", school_id)
+    response_jobs = query_jobs.execute()
+
+    if validate_db_response(response_jobs, "Get cards from processing_jobs"):
+        for job in response_jobs.data:
+            # Skip jobs that already have a reviewed_data entry
+            if job.get("id") in reviewed_doc_ids:
+                continue
+            card = {
+                "document_id": job.get("id"),
+                "id": job.get("id"),
+                "fields": {},
+                "review_status": "processing",
+                "event_id": job.get("event_id"),
+                "school_id": job.get("school_id"),
+                "user_id": str(job.get("user_id")) if job.get("user_id") else None,
+                "created_at": job.get("created_at"),
+                "updated_at": job.get("updated_at"),
+                "image_path": job.get("image_path"),
+                "upload_type": "inquiry_card",
+            }
+            all_cards.append(card)
 
     return all_cards
 

@@ -56,7 +56,7 @@ def _clean_address_with_gemini(address: str, city: str = "", state: str = "", zi
 
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"thinking_config": {"thinking_budget": 0}})
 
         # Create a focused prompt for address cleaning
         prompt = f"""Clean and standardize this US address. Fix any OCR errors or misspellings.

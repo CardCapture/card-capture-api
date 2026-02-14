@@ -454,7 +454,7 @@ async def extract_signup_data_first_pass(image_path: str) -> List[Dict]:
 
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")  # Using latest model
+        model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"thinking_config": {"thinking_budget": 0}})
 
         # Read image file
         with open(image_path, 'rb') as f:
@@ -613,7 +613,7 @@ async def _enhance_single_batch(
 
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"thinking_config": {"thinking_budget": 0}})
 
         # Read image file
         with open(image_path, 'rb') as f:
