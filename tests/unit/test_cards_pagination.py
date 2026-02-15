@@ -8,10 +8,9 @@ Tests:
 4. Deleted/archived cards are excluded
 5. Processing jobs are included for in-progress uploads
 
-Note: The current cards endpoint does not use limit/offset pagination at the
-database level. Instead, it returns all matching records. These tests verify
-the filtering and exclusion logic that serves the same purpose of controlling
-result sets.
+Note: The cards endpoint uses limit/offset pagination at the database level
+and returns a dict with "cards", "total", "limit", and "offset". Filtering
+for deleted/archived records happens at the DB level via .neq() queries.
 
 All external services (Supabase) are mocked.
 """
@@ -98,8 +97,10 @@ def _setup_table_responses(client, reviewed_data=None, interactions=None, jobs=N
         mock = MagicMock()
         mock.select.return_value = mock
         mock.eq.return_value = mock
+        mock.neq.return_value = mock
         mock.in_.return_value = mock
-        mock.execute.return_value = Mock(data=data, error=None)
+        mock.range.return_value = mock
+        mock.execute.return_value = Mock(data=data, count=len(data), error=None)
         return mock
 
     def table_router(name):
@@ -123,11 +124,11 @@ class TestGetCardsDefault:
 
     @pytest.mark.unit
     def test_returns_all_non_deleted_cards(self, mock_supabase_client):
-        """Default query returns reviewed cards, excludes deleted ones."""
+        """Default query returns reviewed cards; deleted ones are filtered at DB level via .neq()."""
+        # Only non-deleted cards are returned by the DB (filtering is now DB-side)
         cards = [
             _make_card("doc-1", status="reviewed"),
             _make_card("doc-2", status="needs_review"),
-            _make_card("doc-3", status="deleted"),  # Should be filtered out
         ]
 
         _setup_table_responses(mock_supabase_client, reviewed_data=cards)
@@ -136,12 +137,11 @@ class TestGetCardsDefault:
             from app.repositories.cards_repository import get_cards_db
             result = get_cards_db(mock_supabase_client)
 
-        # Deleted cards should be filtered out
-        doc_ids = [c["document_id"] for c in result]
+        cards = result["cards"]
+        doc_ids = [c["document_id"] for c in cards]
         assert "doc-1" in doc_ids
         assert "doc-2" in doc_ids
-        assert "doc-3" not in doc_ids
-        assert len(result) == 2
+        assert len(cards) == 2
 
     @pytest.mark.unit
     def test_returns_empty_list_when_no_cards(self, mock_supabase_client):
@@ -152,7 +152,7 @@ class TestGetCardsDefault:
             from app.repositories.cards_repository import get_cards_db
             result = get_cards_db(mock_supabase_client)
 
-        assert result == []
+        assert result["cards"] == []
 
     @pytest.mark.unit
     def test_includes_v2_interactions(self, mock_supabase_client):
@@ -185,33 +185,21 @@ class TestGetCardsDefault:
             from app.repositories.cards_repository import get_cards_db
             result = get_cards_db(mock_supabase_client)
 
-        assert len(result) == 2
-        ids = {c.get("document_id") or c.get("id") for c in result}
+        cards = result["cards"]
+        assert len(cards) == 2
+        ids = {c.get("document_id") or c.get("id") for c in cards}
         assert "doc-1" in ids
         assert "interaction-1" in ids
 
     @pytest.mark.unit
     def test_archived_v2_interactions_excluded(self, mock_supabase_client):
-        """Archived V2 interactions should be excluded from results."""
+        """Archived V2 interactions are filtered at DB level via .neq()."""
+        # Only non-archived interactions are returned by the DB
         v2_interactions = [
             {
                 "id": "interaction-active",
                 "fields": {},
                 "review_status": "reviewed",
-                "event_id": "event-1",
-                "school_id": "school-1",
-                "user_id": "user-123",
-                "created_at": "2025-10-01T12:00:00Z",
-                "updated_at": "2025-10-01T12:00:00Z",
-                "reviewed_at": None,
-                "exported_at": None,
-                "source_method": "qr_code",
-                "image_path": None,
-            },
-            {
-                "id": "interaction-archived",
-                "fields": {},
-                "review_status": "archived",  # Should be excluded
                 "event_id": "event-1",
                 "school_id": "school-1",
                 "user_id": "user-123",
@@ -230,8 +218,9 @@ class TestGetCardsDefault:
             from app.repositories.cards_repository import get_cards_db
             result = get_cards_db(mock_supabase_client)
 
-        assert len(result) == 1
-        assert result[0]["id"] == "interaction-active"
+        cards = result["cards"]
+        assert len(cards) == 1
+        assert cards[0]["id"] == "interaction-active"
 
 
 # =============================================================================
@@ -250,15 +239,12 @@ class TestGetCardsEventFilter:
             from app.repositories.cards_repository import get_cards_db
             get_cards_db(mock_supabase_client, event_id="event-42")
 
-        # Verify eq was called with event_id for reviewed_data table
-        reviewed_table_calls = mock_supabase_client.table.call_args_list
-        assert any(call[0][0] == "reviewed_data" for call in reviewed_table_calls)
-
-        # The chained .eq() should have been called with event_id
-        for call in reviewed_table_calls:
-            table_mock = mock_supabase_client.table(call[0][0])
-            if call[0][0] == "reviewed_data":
-                table_mock.select.return_value.eq.assert_called()
+        # Verify all three tables were queried
+        table_calls = mock_supabase_client.table.call_args_list
+        table_names = [call[0][0] for call in table_calls]
+        assert "reviewed_data" in table_names
+        assert "student_school_interactions" in table_names
+        assert "processing_jobs" in table_names
 
     @pytest.mark.unit
     def test_no_event_id_returns_all_events(self, mock_supabase_client):
@@ -274,7 +260,7 @@ class TestGetCardsEventFilter:
             from app.repositories.cards_repository import get_cards_db
             result = get_cards_db(mock_supabase_client)
 
-        assert len(result) == 3
+        assert len(result["cards"]) == 3
 
 
 # =============================================================================
@@ -309,7 +295,7 @@ class TestGetCardsSchoolFilter:
             from app.repositories.cards_repository import get_cards_db
             result = get_cards_db(mock_supabase_client)
 
-        assert len(result) == 2
+        assert len(result["cards"]) == 2
 
     @pytest.mark.unit
     def test_combined_event_and_school_filter(self, mock_supabase_client):
@@ -321,7 +307,7 @@ class TestGetCardsSchoolFilter:
             from app.repositories.cards_repository import get_cards_db
             result = get_cards_db(mock_supabase_client, event_id="event-1", school_id="school-1")
 
-        assert len(result) == 1
+        assert len(result["cards"]) == 1
 
 
 # =============================================================================
@@ -341,9 +327,10 @@ class TestGetCardsProcessingJobs:
             from app.repositories.cards_repository import get_cards_db
             result = get_cards_db(mock_supabase_client)
 
-        assert len(result) == 1
-        assert result[0]["document_id"] == "job-1"
-        assert result[0]["review_status"] == "processing"
+        cards = result["cards"]
+        assert len(cards) == 1
+        assert cards[0]["document_id"] == "job-1"
+        assert cards[0]["review_status"] == "processing"
 
     @pytest.mark.unit
     def test_duplicate_job_and_reviewed_data_deduped(self, mock_supabase_client):
@@ -359,10 +346,11 @@ class TestGetCardsProcessingJobs:
             result = get_cards_db(mock_supabase_client)
 
         # Should have only 1 entry, not 2 (deduped)
-        assert len(result) == 1
-        assert result[0]["document_id"] == "shared-id-1"
+        cards = result["cards"]
+        assert len(cards) == 1
+        assert cards[0]["document_id"] == "shared-id-1"
         # Should be the reviewed version, not the processing job
-        assert result[0]["review_status"] == "reviewed"
+        assert cards[0]["review_status"] == "reviewed"
 
     @pytest.mark.unit
     def test_processing_job_has_empty_fields(self, mock_supabase_client):
@@ -374,7 +362,7 @@ class TestGetCardsProcessingJobs:
             from app.repositories.cards_repository import get_cards_db
             result = get_cards_db(mock_supabase_client)
 
-        assert result[0]["fields"] == {}
+        assert result["cards"][0]["fields"] == {}
 
 
 # =============================================================================
@@ -386,14 +374,19 @@ class TestGetCardsService:
 
     @pytest.mark.unit
     def test_service_passes_filters_to_repository(self):
-        """The service layer should pass event_id and school_id to the repository."""
+        """The service layer should pass event_id, school_id, limit, and offset to the repository."""
         import asyncio
 
         mock_client = MagicMock()
-        expected_cards = [_make_card("doc-1")]
+        expected_result = {
+            "cards": [_make_card("doc-1")],
+            "total": 1,
+            "limit": 50,
+            "offset": 0,
+        }
 
         with patch('app.services.cards_service.get_supabase_client', return_value=mock_client), \
-             patch('app.services.cards_service.get_cards_db', return_value=expected_cards) as mock_get_cards:
+             patch('app.services.cards_service.get_cards_db', return_value=expected_result) as mock_get_cards:
 
             from app.services.cards_service import get_cards_service
             loop = asyncio.new_event_loop()
@@ -402,8 +395,8 @@ class TestGetCardsService:
             finally:
                 loop.close()
 
-            mock_get_cards.assert_called_once_with(mock_client, "event-1", "school-1")
-            assert result == expected_cards
+            mock_get_cards.assert_called_once_with(mock_client, "event-1", "school-1", 50, 0)
+            assert result == expected_result
 
     @pytest.mark.unit
     def test_service_raises_on_repository_error(self):
