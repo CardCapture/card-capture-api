@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List
 from fastapi import HTTPException
 
 from app.core.clients import get_supabase_client
-from app.utils.retry_utils import log_debug
+from app.utils.retry_utils import log_debug, log_error
 from app.repositories.public_schools_repository import PublicSchoolsRepository
 from app.repositories.universal_events_repository import UniversalEventsRepository
 from app.repositories.event_purchases_repository import EventPurchasesRepository
@@ -31,6 +31,24 @@ class RecruiterSignupService:
         self.schools_repo = PublicSchoolsRepository()
         self.events_repo = UniversalEventsRepository()
         self.purchases_repo = EventPurchasesRepository()
+
+    def _execute_rollback(self, rollback_actions: List[tuple]) -> None:
+        """
+        Execute a list of rollback actions in reverse order.
+        Each action is a tuple of (description, callable).
+        Errors during rollback are logged but do not propagate, so the
+        original error is never masked.
+        """
+        for description, action in reversed(rollback_actions):
+            try:
+                action()
+                log_debug(f"Rollback succeeded: {description}", service="recruiter_signup")
+            except Exception as rollback_err:
+                log_error(
+                    f"Rollback failed: {description}",
+                    data={"error": str(rollback_err)},
+                    service="recruiter_signup"
+                )
 
     async def signup_recruiter(
         self,
@@ -90,32 +108,64 @@ class RecruiterSignupService:
                         detail="Admin email is required for new schools"
                     )
 
+        # Track rollback actions as we progress through each step.
+        # Each entry is (description, callable). On failure, they are
+        # executed in reverse order so later resources are cleaned up first.
+        rollback_actions: List[tuple] = []
+
         # 3. Handle school selection
         school_id, parent_school_id, is_standalone = self._handle_school_selection(
             request.school_selection
         )
+        # Only roll back school creation if we actually created a new one
+        # (both "new" and "existing" paths create a school/virtual-school record)
+        rollback_actions.append((
+            f"delete school {school_id}",
+            lambda sid=school_id: self.supabase.table("schools").delete().eq("id", sid).execute()
+        ))
 
-        # 4. Create Supabase Auth user
-        user_id = self._create_auth_user(
-            email=request.email,
-            password=request.password,
-            first_name=request.first_name,
-            last_name=request.last_name,
-            school_id=school_id
-        )
+        try:
+            # 4. Create Supabase Auth user
+            user_id = self._create_auth_user(
+                email=request.email,
+                password=request.password,
+                first_name=request.first_name,
+                last_name=request.last_name,
+                school_id=school_id
+            )
+        except Exception:
+            log_error("Auth user creation failed, rolling back school", service="recruiter_signup")
+            self._execute_rollback(rollback_actions)
+            raise
 
-        # 5. Create/update profile with recruiter role
-        self._create_or_update_profile(
-            user_id=user_id,
-            email=request.email,
-            first_name=request.first_name,
-            last_name=request.last_name,
-            school_id=school_id,
-            parent_school_id=parent_school_id,
-            is_standalone=is_standalone
-        )
+        rollback_actions.append((
+            f"delete auth user {user_id}",
+            lambda uid=user_id: self.supabase.auth.admin.delete_user(uid)
+        ))
+
+        try:
+            # 5. Create/update profile with recruiter role
+            self._create_or_update_profile(
+                user_id=user_id,
+                email=request.email,
+                first_name=request.first_name,
+                last_name=request.last_name,
+                school_id=school_id,
+                parent_school_id=parent_school_id,
+                is_standalone=is_standalone
+            )
+        except Exception:
+            log_error("Profile creation failed, rolling back auth user and school", service="recruiter_signup")
+            self._execute_rollback(rollback_actions)
+            raise
+
+        rollback_actions.append((
+            f"delete profile {user_id}",
+            lambda uid=user_id: self.supabase.table("profiles").delete().eq("id", uid).execute()
+        ))
 
         # 5.5. Invite admin if this is a new school and recruiter is not the admin
+        # (already wrapped in its own try/except internally, non-fatal)
         should_invite_admin = (
             request.school_selection.type == "new" and
             not request.school_selection.is_self_admin and
@@ -155,33 +205,45 @@ class RecruiterSignupService:
         # Calculate total amount
         total_amount = EVENT_PRICE_CENTS * len(events)
 
-        checkout_session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            line_items=line_items,
-            mode="payment",
-            success_url=f"{frontend_url}/signup/success?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{frontend_url}/signup/select-event?cancelled=true",
-            customer_email=request.email,
-            allow_promotion_codes=True,
-            metadata={
-                "user_id": user_id,
-                "universal_event_ids": json.dumps(request.universal_event_ids),
-                "school_id": school_id,
-                "signup_type": "recruiter_self_service",
-                "event_count": str(len(events))
-            }
-        )
+        try:
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=["card"],
+                line_items=line_items,
+                mode="payment",
+                success_url=f"{frontend_url}/signup/success?session_id={{CHECKOUT_SESSION_ID}}",
+                cancel_url=f"{frontend_url}/signup/select-event?cancelled=true",
+                customer_email=request.email,
+                allow_promotion_codes=True,
+                metadata={
+                    "user_id": user_id,
+                    "universal_event_ids": json.dumps(request.universal_event_ids),
+                    "school_id": school_id,
+                    "signup_type": "recruiter_self_service",
+                    "event_count": str(len(events))
+                }
+            )
+        except Exception:
+            log_error("Stripe checkout creation failed, rolling back profile, auth user, and school", service="recruiter_signup")
+            self._execute_rollback(rollback_actions)
+            raise
 
         # 7. Create event purchase records for each event (before sign-in to keep service role)
-        for event_id in request.universal_event_ids:
-            self.purchases_repo.create_purchase(
-                user_id=user_id,
-                universal_event_id=event_id,
-                stripe_checkout_session_id=checkout_session.id,
-                amount=EVENT_PRICE_CENTS
-            )
+        try:
+            for event_id in request.universal_event_ids:
+                self.purchases_repo.create_purchase(
+                    user_id=user_id,
+                    universal_event_id=event_id,
+                    stripe_checkout_session_id=checkout_session.id,
+                    amount=EVENT_PRICE_CENTS
+                )
+        except Exception:
+            log_error("Event purchase creation failed, rolling back profile, auth user, and school", service="recruiter_signup")
+            self._execute_rollback(rollback_actions)
+            raise
 
         # 8. Sign in the user to get session tokens (do this last!)
+        # Sign-in failure is not worth rolling back the entire signup for,
+        # since all records are already created and the user can log in manually.
         session_tokens = self._sign_in_user(request.email, request.password)
 
         return RecruiterSignupResponse(
