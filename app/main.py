@@ -66,4 +66,9 @@ async def root():
         "version": "1.0.0"
     }
 
+@app.get("/health")
+async def health():
+    """Dedicated health check endpoint for container orchestration."""
+    return {"status": "healthy", "service": "card-capture-api"}
+
  
