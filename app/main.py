@@ -1,3 +1,5 @@
+import os
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import cards_router, auth_router, uploads_router, events_router, users_router, schools_router, stripe_router, superadmin_router, sftp_router, demo_router, crm_events_router, students_router, registration_router, qr_router, high_schools_router, majors_router, notifications_router, public_router, account_linking_router
@@ -5,6 +7,14 @@ from app.api.routes.mfa import router as mfa_router
 from app.api.routes.webhooks import router as webhooks_router
 from app.config import ALLOWED_ORIGINS
 from app.core.error_handling import register_exception_handlers
+
+sentry_dsn = os.getenv("SENTRY_DSN")
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        traces_sample_rate=0.1,
+        environment=os.getenv("ENVIRONMENT", "development"),
+    )
 
 # Trigger build - reverted to working state
 app = FastAPI(title="Card Scanner API")
