@@ -14,7 +14,7 @@ from app.repositories.event_purchases_repository import EventPurchasesRepository
 from app.repositories.universal_events_repository import UniversalEventsRepository
 from app.repositories.account_link_requests_repository import AccountLinkRequestsRepository
 from app.services.notification_service import NotificationService
-from app.utils.retry_utils import log_debug
+from app.utils.retry_utils import log_debug, log_info
 
 router = APIRouter(tags=["Webhooks"])
 
@@ -167,7 +167,11 @@ async def stripe_webhook(
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     event_type = event.get("type") if isinstance(event, dict) else event.type
-    log_debug(f"Received Stripe webhook: {event_type}", service="webhook")
+    session_obj = (
+        event.get("data", {}).get("object", {}) if isinstance(event, dict) else event.data.object
+    )
+    webhook_session_id = session_obj.get("id", "unknown") if isinstance(session_obj, dict) else getattr(session_obj, "id", "unknown")
+    log_info(f"Received Stripe webhook: type={event_type}, session_id={webhook_session_id}", service="webhook")
 
     # Handle checkout.session.completed
     if event_type == "checkout.session.completed":
@@ -207,7 +211,7 @@ async def handle_checkout_completed(session: dict):
         single_id = metadata.get("universal_event_id")
         universal_event_ids = [single_id] if single_id else []
 
-    log_debug(f"Processing completed checkout: {session_id}", service="webhook")
+    log_info(f"Processing completed checkout: {session_id}", service="webhook")
     log_debug(f"Metadata: user_id={user_id}, event_ids={universal_event_ids}, school_id={school_id}", service="webhook")
 
     if not user_id or not school_id or not universal_event_ids:
@@ -218,6 +222,21 @@ async def handle_checkout_completed(session: dict):
         supabase = get_supabase_client()
         purchases_repo = EventPurchasesRepository()
         events_repo = UniversalEventsRepository()
+
+        # Idempotency check: skip if all purchases for this session are already completed
+        existing_completed = (
+            supabase.table("event_purchases")
+            .select("id")
+            .eq("stripe_session_id", session_id)
+            .eq("status", "completed")
+            .execute()
+        )
+        if existing_completed.data and len(existing_completed.data) == len(universal_event_ids):
+            log_info(
+                f"Idempotency guard: all {len(existing_completed.data)} purchases already completed for session {session_id}, skipping",
+                service="webhook"
+            )
+            return
 
         # Get all purchase records for this session
         purchases = purchases_repo.get_purchases_by_session_id(session_id)
@@ -313,6 +332,8 @@ async def handle_checkout_completed(session: dict):
                 purchase_date=timestamp,
                 signup_type=signup_type
             )
+
+        log_info(f"Checkout processing complete for session {session_id}: {len(purchased_events)} events processed", service="webhook")
 
     except Exception as e:
         log_debug(f"Error processing checkout completion: {str(e)}", service="webhook")
