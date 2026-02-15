@@ -138,7 +138,8 @@ class TestSignupAuthFailure:
         with patch('app.services.recruiter_signup_service.get_supabase_client', return_value=mock_supabase_client), \
              patch('app.services.recruiter_signup_service.UniversalEventsRepository') as mock_events_repo_cls, \
              patch('app.services.recruiter_signup_service.PublicSchoolsRepository') as mock_schools_repo_cls, \
-             patch('app.services.recruiter_signup_service.EventPurchasesRepository'):
+             patch('app.services.recruiter_signup_service.EventPurchasesRepository'), \
+             patch.dict(os.environ, {"STRIPE_SECRET_KEY": "sk_test_123"}):
 
             # Set up events repo to return valid event
             mock_events_repo = mock_events_repo_cls.return_value
@@ -169,7 +170,8 @@ class TestSignupAuthFailure:
         with patch('app.services.recruiter_signup_service.get_supabase_client', return_value=mock_supabase_client), \
              patch('app.services.recruiter_signup_service.UniversalEventsRepository') as mock_events_repo_cls, \
              patch('app.services.recruiter_signup_service.PublicSchoolsRepository') as mock_schools_repo_cls, \
-             patch('app.services.recruiter_signup_service.EventPurchasesRepository'):
+             patch('app.services.recruiter_signup_service.EventPurchasesRepository'), \
+             patch.dict(os.environ, {"STRIPE_SECRET_KEY": "sk_test_123"}):
 
             mock_events_repo = mock_events_repo_cls.return_value
             mock_events_repo.get_event_by_id.return_value = mock_event_data
