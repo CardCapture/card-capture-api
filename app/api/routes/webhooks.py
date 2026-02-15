@@ -227,7 +227,7 @@ async def handle_checkout_completed(session: dict):
         existing_completed = (
             supabase.table("event_purchases")
             .select("id")
-            .eq("stripe_session_id", session_id)
+            .eq("stripe_checkout_session_id", session_id)
             .eq("status", "completed")
             .execute()
         )

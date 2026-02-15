@@ -477,7 +477,7 @@ async def verify_payment(session_id: str) -> Dict[str, Any]:
         existing_completed = (
             supabase.table("event_purchases")
             .select("id, event_id")
-            .eq("stripe_session_id", session_id)
+            .eq("stripe_checkout_session_id", session_id)
             .eq("status", "completed")
             .execute()
         )
