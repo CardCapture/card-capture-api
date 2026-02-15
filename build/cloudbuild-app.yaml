@@ -98,6 +98,10 @@ steps:
       ]
 
   # Deploy worker to Cloud Run
+  # Scaling recommendation for college fair events (300 students, 50 schools):
+  #   --min-instances=3 --max-instances=10
+  # Set these via Cloud Run console or gcloud CLI before fair events to ensure
+  # warm instances are ready for burst traffic. Reset to defaults after.
   - name: "gcr.io/cloud-builders/gcloud"
     args:
       [
