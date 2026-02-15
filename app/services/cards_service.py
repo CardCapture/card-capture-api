@@ -13,7 +13,12 @@ from app.repositories.cards_repository import (
 from app.utils.archive_logging import log_archive_debug
 from app.utils.retry_utils import log_debug
 
-async def get_cards_service(event_id: Optional[str] = None, school_id: Optional[str] = None):
+async def get_cards_service(
+    event_id: Optional[str] = None,
+    school_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict[str, Any]:
     try:
         log_debug("Received /cards request", service="cards")
 
@@ -23,9 +28,8 @@ async def get_cards_service(event_id: Optional[str] = None, school_id: Optional[
             log_debug(f"Filtering by school_id: {school_id}", service="cards")
 
         supabase_client = get_supabase_client()
-        result = get_cards_db(supabase_client, event_id, school_id)
-        log_debug(f"Found {len(result)} reviewed records", service="cards")
-        log_debug(f"Returning {len(result)} non-deleted, non-archived records", service="cards")
+        result = get_cards_db(supabase_client, event_id, school_id, limit, offset)
+        log_debug(f"Returning {len(result['cards'])} cards (total: {result['total']})", service="cards")
         return result
     except Exception as e:
         log_debug(f"Error in /cards endpoint: {e}", service="cards")

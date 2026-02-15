@@ -5,78 +5,96 @@ from app.utils.db_utils import (
     validate_db_response,
 )
 
-@safe_db_operation("Get cards")
-def get_cards_db(supabase_client, event_id: Union[str, None] = None, school_id: Union[str, None] = None) -> List[Dict[str, Any]]:
-    """Get cards from reviewed_data (V1), student_school_interactions (V2), and in-progress processing_jobs.
 
-    Args:
-        supabase_client: The Supabase client
-        event_id: Optional event ID to filter by
-        school_id: Optional school ID to filter by (for multi-tenant isolation)
+def get_cards_db(
+    supabase_client,
+    event_id: Union[str, None] = None,
+    school_id: Union[str, None] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """Get paginated cards from reviewed_data (V1), student_school_interactions (V2),
+    and in-progress processing_jobs.
+
+    Returns a dict with "cards", "total", "limit", and "offset".
     """
-    all_cards = []
+    all_cards: List[Dict[str, Any]] = []
+    total_count = 0
 
-    # Fetch V1 cards from reviewed_data
-    query_v1 = supabase_client.table("reviewed_data").select("*")
+    # --- V1: reviewed_data (with count) ---
+    query_v1 = (
+        supabase_client.table("reviewed_data")
+        .select("*", count="exact")
+        .neq("review_status", "deleted")
+    )
     if event_id:
         query_v1 = query_v1.eq("event_id", event_id)
     if school_id:
         query_v1 = query_v1.eq("school_id", school_id)
+    query_v1 = query_v1.range(offset, offset + limit - 1)
     response_v1 = query_v1.execute()
 
-    # Track document IDs from reviewed_data so we don't duplicate with processing_jobs
-    reviewed_doc_ids = set()
+    v1_count = response_v1.count if response_v1.count is not None else 0
+    reviewed_doc_ids: set = set()
 
     if validate_db_response(response_v1, "Get cards from reviewed_data"):
-        v1_cards = [card for card in response_v1.data if card.get("review_status") != "deleted"]
-        for card in v1_cards:
+        for card in response_v1.data:
             reviewed_doc_ids.add(card.get("document_id"))
-        all_cards.extend(v1_cards)
+        all_cards.extend(response_v1.data)
 
-    # Fetch V2 interactions from student_school_interactions
-    query_v2 = supabase_client.table("student_school_interactions").select("*")
+    # --- V2: student_school_interactions (with count) ---
+    query_v2 = (
+        supabase_client.table("student_school_interactions")
+        .select("*", count="exact")
+        .neq("review_status", "archived")
+    )
     if event_id:
         query_v2 = query_v2.eq("event_id", event_id)
     if school_id:
         query_v2 = query_v2.eq("school_id", school_id)
+    query_v2 = query_v2.range(offset, offset + limit - 1)
     response_v2 = query_v2.execute()
 
-    if validate_db_response(response_v2, "Get cards from student_school_interactions"):
-        # Transform V2 interactions to match V1 card format
-        for interaction in response_v2.data:
-            if interaction.get("review_status") != "archived":
-                # Map interaction to card format
-                card = {
-                    "document_id": interaction.get("id"),  # Use interaction id as document_id
-                    "id": interaction.get("id"),
-                    "fields": interaction.get("fields", {}),
-                    "review_status": interaction.get("review_status"),
-                    "event_id": interaction.get("event_id"),
-                    "school_id": interaction.get("school_id"),
-                    "user_id": interaction.get("user_id"),
-                    "created_at": interaction.get("created_at"),
-                    "updated_at": interaction.get("updated_at"),
-                    "reviewed_at": interaction.get("reviewed_at"),
-                    "exported_at": interaction.get("exported_at"),
-                    "upload_type": interaction.get("source_method", "qr_code"),  # Map source_method to upload_type
-                    "image_path": interaction.get("image_path"),  # Universal cards have images, QR codes will be None
-                    "trimmed_image_path": interaction.get("image_path"),  # Use same path for trimmed (no trimming for V2)
-                }
-                all_cards.append(card)
+    v2_count = response_v2.count if response_v2.count is not None else 0
 
-    # Fetch in-progress processing jobs (queued/processing) that don't yet have reviewed_data
-    query_jobs = supabase_client.table("processing_jobs").select("*").in_("status", ["queued", "processing"])
+    if validate_db_response(response_v2, "Get cards from student_school_interactions"):
+        for interaction in response_v2.data:
+            card = {
+                "document_id": interaction.get("id"),
+                "id": interaction.get("id"),
+                "fields": interaction.get("fields", {}),
+                "review_status": interaction.get("review_status"),
+                "event_id": interaction.get("event_id"),
+                "school_id": interaction.get("school_id"),
+                "user_id": interaction.get("user_id"),
+                "created_at": interaction.get("created_at"),
+                "updated_at": interaction.get("updated_at"),
+                "reviewed_at": interaction.get("reviewed_at"),
+                "exported_at": interaction.get("exported_at"),
+                "upload_type": interaction.get("source_method", "qr_code"),
+                "image_path": interaction.get("image_path"),
+                "trimmed_image_path": interaction.get("image_path"),
+            }
+            all_cards.append(card)
+
+    # --- Processing jobs (always small, not paginated) ---
+    query_jobs = (
+        supabase_client.table("processing_jobs")
+        .select("*", count="exact")
+        .in_("status", ["queued", "processing"])
+    )
     if event_id:
         query_jobs = query_jobs.eq("event_id", event_id)
     if school_id:
         query_jobs = query_jobs.eq("school_id", school_id)
     response_jobs = query_jobs.execute()
 
+    jobs_count = 0
     if validate_db_response(response_jobs, "Get cards from processing_jobs"):
         for job in response_jobs.data:
-            # Skip jobs that already have a reviewed_data entry
             if job.get("id") in reviewed_doc_ids:
                 continue
+            jobs_count += 1
             card = {
                 "document_id": job.get("id"),
                 "id": job.get("id"),
@@ -92,7 +110,14 @@ def get_cards_db(supabase_client, event_id: Union[str, None] = None, school_id: 
             }
             all_cards.append(card)
 
-    return all_cards
+    total_count = v1_count + v2_count + jobs_count
+
+    return {
+        "cards": all_cards,
+        "total": total_count,
+        "limit": limit,
+        "offset": offset,
+    }
 
 @safe_db_operation("Mark cards as exported")
 def mark_as_exported_db(supabase_client, document_ids: List[str]):

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, HTTPException, Depends
+from fastapi import APIRouter, Body, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
 from app.core.auth import get_current_user
 from typing import Dict, Any, List, Union
@@ -32,17 +32,20 @@ router = APIRouter()
 # Define required fields that determine review status
 REQUIRED_FIELDS = ["address", "cell", "city", "state", "zip_code", "name", "email"]
 
-@router.get("/cards", response_model=List[Dict[str, Any]])
-async def get_cards(event_id: Union[str, None] = None, user=Depends(get_current_user)):
-    """Get cards with multi-tenant isolation."""
-    # If event_id provided, verify user can access that event
+@router.get("/cards")
+async def get_cards(
+    event_id: Union[str, None] = None,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    user=Depends(get_current_user),
+):
+    """Get cards with multi-tenant isolation and pagination."""
     if event_id:
         await verify_event_belongs_to_user_school(event_id, user)
 
-    # Get user's school_id for filtering (None for SuperAdmins)
     school_id = user.get("school_id") if not is_superadmin(user) else None
 
-    return await get_cards_service(event_id, school_id)
+    return await get_cards_service(event_id, school_id, limit, offset)
 
 @router.post("/archive-cards")
 async def archive_cards(payload: BulkActionPayload, user=Depends(get_current_user)):
