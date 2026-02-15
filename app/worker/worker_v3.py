@@ -20,14 +20,15 @@ from app.repositories.uploads_repository import update_job_status_with_review
 # from app.utils.image_processing import ensure_trimmed_image  # Removed - no longer using image trimming
 from app.utils.storage import upload_to_supabase_storage_from_path
 from app.utils.retry_utils import log_debug
+from app.config import ALLOWED_ORIGINS
 
 
 app = FastAPI(title="CardCapture Worker API V3")
 
-# Add CORS middleware
+# Add CORS middleware - restrict to same origins as the main API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -38,7 +39,7 @@ pipeline = CardProcessingPipeline()
 
 BUCKET = "cards-uploads"
 MAX_RETRIES = 3
-SLEEP_SECONDS = 1
+SLEEP_SECONDS = float(os.getenv("WORKER_SLEEP_SECONDS", "0.25"))
 STALE_JOB_MINUTES = 5
 
 
@@ -46,7 +47,7 @@ STALE_JOB_MINUTES = 5
 async def startup_event():
     """Log when the app starts up"""
     log_debug("CardCapture Worker API V3 (Race Condition Fixed) is starting up...", service="worker")
-    log_debug(f"Environment: PORT={os.environ.get('PORT', 'NOT_SET')}", service="worker")
+    log_debug(f"Environment: PORT={os.environ.get('PORT', 'NOT_SET')}, SLEEP_SECONDS={SLEEP_SECONDS}", service="worker")
     try:
         from app.core.clients import get_supabase_client
         supabase_client = get_supabase_client()
@@ -320,6 +321,8 @@ def process_job_v3(job: Dict[str, Any]) -> None:
     school_id = job["school_id"]
     event_id = job.get("event_id")
 
+    job_start_time = time.monotonic()
+
     log_debug(f"=== PROCESSING JOB V3 START ===", {
         "job_id": job_id,
         "retry_count": retry_count,
@@ -342,9 +345,12 @@ def process_job_v3(job: Dict[str, Any]) -> None:
     try:
         # Step 1: Download image
         log_debug("=== STEP 1: DOWNLOAD IMAGE ===", service="worker_v3")
+        step1_start = time.monotonic()
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_url)[1] or '.png') as tmp:
             tmp_file = tmp.name
         download_from_supabase(file_url, tmp_file)
+        step1_elapsed = time.monotonic() - step1_start
+        log_debug(f"[TIMING] Step 1 (download) completed in {step1_elapsed:.2f}s", service="worker_v3")
 
         # REMOVED: Duplicate detection was masking the real problem
         # The frontend is reusing the same image file for multiple scans
@@ -352,6 +358,7 @@ def process_job_v3(job: Dict[str, Any]) -> None:
 
         # Step 2: Run the pipeline (this is the magic!)
         log_debug("=== STEP 2: RUN PIPELINE ===", service="worker_v3")
+        step2_start = time.monotonic()
 
         # Extract storage path for rotation correction
         # file_url format: "cards-uploads/user_id/date/filename"
@@ -364,7 +371,9 @@ def process_job_v3(job: Dict[str, Any]) -> None:
             event_id=event_id,
             original_storage_path=original_storage_path
         )
-        
+        step2_elapsed = time.monotonic() - step2_start
+        log_debug(f"[TIMING] Step 2 (pipeline) completed in {step2_elapsed:.2f}s", service="worker_v3")
+
         log_debug("Pipeline processing complete", {
             "stage": result.stage.value,
             "field_count": len(result.fields),
@@ -386,6 +395,7 @@ def process_job_v3(job: Dict[str, Any]) -> None:
         
         # Step 4: Save results to database (V1 vs V2 routing)
         log_debug("=== STEP 4: SAVE TO DATABASE ===", service="worker_v3")
+        step4_start = time.monotonic()
 
         # Convert FieldData objects back to dict format for database
         fields_dict = {}
@@ -476,7 +486,16 @@ def process_job_v3(job: Dict[str, Any]) -> None:
 
             update_job_status_with_review(supabase_client, job_id, "complete", review_data)
         
-        log_debug(f"✅ Job {job_id} completed successfully with new pipeline", service="worker_v3")
+        step4_elapsed = time.monotonic() - step4_start
+        total_elapsed = time.monotonic() - job_start_time
+        log_debug(f"[TIMING] Step 4 (db save) completed in {step4_elapsed:.2f}s", service="worker_v3")
+        log_debug(f"[TIMING] Job {job_id} total processing time: {total_elapsed:.2f}s", {
+            "download_s": round(step1_elapsed, 2),
+            "pipeline_s": round(step2_elapsed, 2),
+            "db_save_s": round(step4_elapsed, 2),
+            "total_s": round(total_elapsed, 2)
+        }, service="worker_v3")
+        log_debug(f"Job {job_id} completed successfully with new pipeline", service="worker_v3")
         log_debug("=== PROCESSING JOB V3 END ===", service="worker_v3")
         
     except Exception as e:
@@ -534,7 +553,8 @@ def main_v3():
 
             if result.data and len(result.data) > 0:
                 job = result.data[0]
-                log_debug(f"Successfully claimed job {job['id']}", {
+                claim_time = time.monotonic()
+                log_debug(f"[TIMING] Job {job['id']} claimed at {datetime.now(timezone.utc).isoformat()}", {
                     "worker_id": worker_id,
                     "retry_count": job.get('retry_count', 0)
                 }, service="worker_v3")
