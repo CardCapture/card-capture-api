@@ -6,7 +6,7 @@ No authentication required.
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, Dict, Any
 
-from app.utils.retry_utils import log_debug
+from app.utils.retry_utils import log_debug, log_info
 from app.models.recruiter_signup import (
     RecruiterSignupRequest,
     RecruiterSignupResponse,
@@ -426,6 +426,8 @@ async def verify_payment(session_id: str) -> Dict[str, Any]:
         events_repo = UniversalEventsRepository()
         supabase = get_supabase_client()
 
+        log_info(f"Verify-payment called for session: {session_id}", service="public")
+
         # Get all purchases for this session
         purchases = purchases_repo.get_purchases_by_session_id(session_id)
 
@@ -470,6 +472,27 @@ async def verify_payment(session_id: str) -> Dict[str, Any]:
 
         # Stripe says paid but webhook hasn't processed yet - do it now!
         # This is the fallback path when webhooks are slow or don't fire
+
+        # Idempotency check: re-query purchases to see if webhook completed while we were checking Stripe
+        existing_completed = (
+            supabase.table("event_purchases")
+            .select("id, event_id")
+            .eq("stripe_session_id", session_id)
+            .eq("status", "completed")
+            .execute()
+        )
+        if existing_completed.data and len(existing_completed.data) == len(purchases):
+            event_ids = [p.get("event_id") for p in existing_completed.data if p.get("event_id")]
+            log_info(
+                f"Idempotency guard: all {len(existing_completed.data)} purchases already completed for session {session_id}, returning cached result",
+                service="public"
+            )
+            return {
+                "status": "completed",
+                "event_ids": event_ids,
+                "event_id": event_ids[0] if event_ids else None,
+                "message": "Payment successful! Redirecting to your events..."
+            }
 
         metadata = stripe_session.metadata or {}
         user_id = metadata.get("user_id")
@@ -574,6 +597,8 @@ async def verify_payment(session_id: str) -> Dict[str, Any]:
                 checkout_session_id=session_id,
                 purchase_date=timestamp
             )
+
+            log_info(f"Verify-payment inline processing complete for session {session_id}: {len(created_event_ids)} events created", service="public")
 
             return {
                 "status": "completed",
