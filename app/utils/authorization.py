@@ -67,7 +67,7 @@ async def verify_event_belongs_to_user_school(
     supabase = get_supabase_client()
     event = supabase.table("events").select("school_id").eq("id", event_id).maybe_single().execute()
 
-    if not event.data:
+    if not event or not event.data:
         if raise_on_failure:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -133,11 +133,11 @@ async def verify_document_belongs_to_user_school(
     # Try V1 table first (reviewed_data)
     doc = supabase.table("reviewed_data").select("school_id").eq("document_id", document_id).maybe_single().execute()
 
-    if not doc.data:
+    if not doc or not doc.data:
         # Try V2 table (student_school_interactions)
         doc = supabase.table("student_school_interactions").select("school_id").eq("id", document_id).maybe_single().execute()
 
-    if not doc.data:
+    if not doc or not doc.data:
         if raise_on_failure:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
