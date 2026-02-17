@@ -96,3 +96,6 @@ trim_image_test/
 
 # Claude Code context files - never commit
 **/CLAUDE.md
+
+# MCP config (contains auth tokens)
+.mcp.json
