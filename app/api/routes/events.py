@@ -379,6 +379,7 @@ async def delete_event(event_id: str, user=Depends(get_current_user)):
 @router.get("/events-with-stats")
 async def get_events_with_stats(
     school_id: Optional[str] = Query(None),
+    limit: int = Query(default=500, ge=1, le=1000, description="Max events to return"),
     user=Depends(get_current_user)
 ):
     """
@@ -408,6 +409,7 @@ async def get_events_with_stats(
         if filter_school_id:
             events_query = events_query.eq("school_id", filter_school_id)
 
+        events_query = events_query.limit(limit)
         events_response = events_query.execute()
         events = events_response.data if events_response.data else []
 

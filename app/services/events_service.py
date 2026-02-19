@@ -1,5 +1,5 @@
 from fastapi.responses import JSONResponse
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Response, status
 from app.core.clients import get_supabase_client
 from app.repositories.events_repository import (
     insert_event_db,
@@ -206,7 +206,7 @@ async def delete_event_service(event_id: str, user):
     try:
         reviewed, extracted, event = delete_event_and_cards_db(supabase_client, event_id)
         log_debug(f"Deleted event {event_id} and associated cards", service="events")
-        return JSONResponse(status_code=status.HTTP_204_NO_CONTENT, content={"success": True})
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as e:
         log_debug(f"Error deleting event {event_id}: {e}", service="events")
         return JSONResponse(status_code=500, content={"error": str(e)}) 
