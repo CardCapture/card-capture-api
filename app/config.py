@@ -69,7 +69,7 @@ ALLOWED_ORIGINS = [
 ]
 
 GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_GENERATION_CONFIG = {"thinking_config": {"thinking_budget": 0}}
+GEMINI_GENERATION_CONFIG = {"thinking_config": {"thinking_budget": 0}}  # Used as kwargs to GenerateContentConfig
 
 # Frontend URL for invitation links
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")

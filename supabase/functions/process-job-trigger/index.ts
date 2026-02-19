@@ -23,8 +23,10 @@ serve(async (req) => {
     console.log(`Processing job trigger for jobId: ${jobId}`);
 
     // Make request to Cloud Run service with /process endpoint (now using unified worker with V3)
-    const cloudRunUrl = Deno.env.get("WORKER_URL") || 
-      "https://card-capture-worker-unified-staging-878585200500.us-central1.run.app/process";
+    const cloudRunUrl = Deno.env.get("WORKER_URL");
+    if (!cloudRunUrl) {
+      throw new Error("WORKER_URL environment variable is not set. Configure it in Supabase Edge Function secrets.");
+    }
 
     const response = await fetch(cloudRunUrl, {
       method: "POST",

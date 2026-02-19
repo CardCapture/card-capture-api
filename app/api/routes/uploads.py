@@ -145,7 +145,7 @@ async def upload_signup_sheet(
             tmp_file_path = tmp_file.name
         
         # Optimize image for storage (compress large files)
-        from app.utils.image_processing_v2 import optimize_image_for_storage
+        from app.utils.image_processing import optimize_image_for_storage
         try:
             optimized_path = optimize_image_for_storage(tmp_file_path, max_size=2048, quality=85)
             # Use optimized version if compression was successful

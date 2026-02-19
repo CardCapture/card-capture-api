@@ -56,15 +56,14 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
         if not api_key:
             raise Exception("GEMINI_API_KEY not found in environment variables")
             
-        log_debug("Configuring Gemini with API key...", service="gemini")
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+        log_debug("Configuring Gemini with new SDK...", service="gemini")
+        from app.core.clients import get_gemini_client
+        from google.genai import types as genai_types
+        gemini_client = get_gemini_client()
         log_debug("Gemini configured successfully", service="gemini")
-        
+
         log_debug("Initializing Gemini model...", service="gemini")
         log_debug(f"Using model: {GEMINI_MODEL}", service="gemini")
-        model = genai.GenerativeModel(GEMINI_MODEL, generation_config=GEMINI_GENERATION_CONFIG)
-        log_debug("Gemini model initialized successfully", service="gemini")
         
         # Prepare input for Gemini (fields + valid_majors)
         log_debug("Preparing input for Gemini...", service="gemini")
@@ -156,10 +155,14 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
             # Generate content with retry logic - pass image data directly
             log_debug("Attempting to generate content with Gemini...", service="gemini")
             response = retry_with_exponential_backoff(
-                func=lambda: model.generate_content([
-                    prompt,
-                    {"mime_type": mime_type, "data": image_data}
-                ]),
+                func=lambda: gemini_client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=[
+                        prompt,
+                        genai_types.Part.from_bytes(data=image_data, mime_type=mime_type)
+                    ],
+                    config=genai_types.GenerateContentConfig(**GEMINI_GENERATION_CONFIG)
+                ),
                 max_retries=3,
                 operation_name="Gemini content generation",
                 service="gemini"
@@ -265,12 +268,9 @@ def process_card_with_gemini_v2(image_path: str, docai_fields: Dict[str, Any], v
     except Exception as e:
         log_debug(f"ERROR in Gemini processing: {str(e)}", service="gemini")
         log_debug("Full traceback:", traceback.format_exc(), service="gemini")
-        # Return original fields with error flags
-        for field_name, field_data in docai_fields.items():
-            field_data["requires_human_review"] = True
-            field_data["review_notes"] = "This field needs manual review due to a processing issue"
-            field_data["review_confidence"] = 0.1
-        return docai_fields
+        import sentry_sdk
+        sentry_sdk.capture_exception(e)
+        raise
 
 def parse_gemini_quality_response(response_text: str, docai_fields: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -422,7 +422,9 @@ def parse_gemini_quality_response(response_text: str, docai_fields: Dict[str, An
     except Exception as e:
         log_debug(f"Error parsing Gemini response: {str(e)}", service="gemini")
         log_debug("Response that caused error:", response_text, service="gemini")
-        
+        import sentry_sdk
+        sentry_sdk.capture_exception(e)
+
         # 🔍 TRACK CRITICAL FIELDS: Log fallback for critical fields
         log_debug("🔍 PARSER - ERROR FALLBACK - CRITICAL FIELDS", {
             field_name: docai_fields.get(field_name, "FIELD_NOT_FOUND")

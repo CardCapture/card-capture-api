@@ -54,9 +54,9 @@ def _clean_address_with_gemini(address: str, city: str = "", state: str = "", zi
             log_debug("No Gemini API key found, skipping address cleaning", service="address_validation")
             return {"address": address, "city": city, "state": state, "zip_code": zip_code}
 
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"thinking_config": {"thinking_budget": 0}})
+        from app.core.clients import get_gemini_client
+        from google.genai import types as genai_types
+        gemini_client = get_gemini_client()
 
         # Create a focused prompt for address cleaning
         prompt = f"""Clean and standardize this US address. Fix any OCR errors or misspellings.
@@ -86,7 +86,11 @@ Return ONLY a JSON object with these fields:
 
 If a field is empty or unclear, leave it as empty string."""
 
-        response = model.generate_content(prompt)
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(thinking_config=genai_types.ThinkingConfig(thinking_budget=0))
+        )
         if not response or not response.text:
             return {"address": address, "city": city, "state": state, "zip_code": zip_code}
 

@@ -290,13 +290,8 @@ class SignupSheetPipeline:
             if field_data.requires_human_review:
                 fields_needing_review.append(field_name)
 
-        # Determine overall review status
-        if len(fields_needing_review) == 0:
-            review_status = "reviewed"  # All fields verified, no review needed
-        elif len(fields_needing_review) <= 2:
-            review_status = "needs_review"  # A few fields need checking
-        else:
-            review_status = "needs_review"  # Multiple fields need review
+        # Determine overall review status - always require manual review
+        review_status = "needs_review"
 
         # Create final result
         final_result = ProcessingResult(

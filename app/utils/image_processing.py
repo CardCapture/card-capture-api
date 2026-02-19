@@ -414,5 +414,50 @@ def ensure_trimmed_image(original_image_path: str) -> str:
         return original_image_path
 
 
+def optimize_image_for_storage(image_path: str, max_size: int = 2048, quality: int = 85) -> str:
+    """
+    Optimize an image for storage by resizing large images and compressing.
+    Used for sign-up sheet uploads to reduce storage costs.
+
+    Args:
+        image_path: Path to the image file
+        max_size: Maximum width or height in pixels
+        quality: JPEG quality (1-100)
+
+    Returns:
+        Path to the optimized image (may be same as input if no optimization needed)
+    """
+    try:
+        img = Image.open(image_path)
+        img = ImageOps.exif_transpose(img)
+
+        if img.mode in ('RGBA', 'LA', 'P'):
+            img = img.convert('RGB')
+
+        # Only resize if larger than max_size
+        if img.width > max_size or img.height > max_size:
+            img.thumbnail((max_size, max_size), Image.LANCZOS)
+            log_debug(f"[Optimize] Resized to {img.width}x{img.height}", service="image_processing")
+
+        # Save optimized version
+        base_path, ext = os.path.splitext(image_path)
+        optimized_path = f"{base_path}_optimized.jpg"
+        img.save(optimized_path, format='JPEG', quality=quality, optimize=True)
+
+        original_size = os.path.getsize(image_path)
+        optimized_size = os.path.getsize(optimized_path)
+        log_debug(
+            f"[Optimize] {original_size / 1024:.0f}KB -> {optimized_size / 1024:.0f}KB "
+            f"({(1 - optimized_size / original_size) * 100:.0f}% reduction)",
+            service="image_processing"
+        )
+
+        return optimized_path
+
+    except Exception as e:
+        log_debug(f"[Optimize] Error: {e}", service="image_processing")
+        return image_path
+
+
 # Alias for compatibility with v2
 ensure_trimmed_image_v2 = ensure_trimmed_image

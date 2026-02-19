@@ -62,4 +62,15 @@ except Exception:
 
 mime_type = "image/png"
 
-# print(f"SUPABASE_URL: {SUPABASE_URL}") 
+# Gemini (new google-genai SDK)
+_gemini_client = None
+
+def get_gemini_client():
+    global _gemini_client
+    if _gemini_client is None:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found in environment variables")
+        from google import genai
+        _gemini_client = genai.Client(api_key=api_key)
+    return _gemini_client 

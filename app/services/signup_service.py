@@ -365,9 +365,9 @@ async def extract_signup_data_with_gemini(image_path: str, valid_majors: List[st
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
 
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-pro")
+        from app.core.clients import get_gemini_client
+        from google.genai import types as genai_types
+        gemini_client = get_gemini_client()
 
         # Read image file
         with open(image_path, 'rb') as f:
@@ -379,10 +379,13 @@ async def extract_signup_data_with_gemini(image_path: str, valid_majors: List[st
         log_debug("Sending image to Gemini for processing with major mapping...", service="signup")
 
         # Process with Gemini
-        response = model.generate_content([
-            prompt,
-            {"mime_type": "image/jpeg", "data": image_data}
-        ])
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=[
+                prompt,
+                genai_types.Part.from_bytes(data=image_data, mime_type="image/jpeg")
+            ]
+        )
         
         log_debug("Received response from Gemini", {
             "response_text": response.text[:200] + "..." if len(response.text) > 200 else response.text
@@ -452,9 +455,9 @@ async def extract_signup_data_first_pass(image_path: str) -> List[Dict]:
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
 
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"thinking_config": {"thinking_budget": 0}})
+        from app.core.clients import get_gemini_client
+        from google.genai import types as genai_types
+        gemini_client = get_gemini_client()
 
         # Read image file
         with open(image_path, 'rb') as f:
@@ -466,10 +469,14 @@ async def extract_signup_data_first_pass(image_path: str) -> List[Dict]:
         log_debug("Sending image to Gemini for first-pass extraction...", service="signup")
 
         # Process with Gemini
-        response = model.generate_content([
-            prompt,
-            {"mime_type": "image/jpeg", "data": image_data}
-        ])
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                prompt,
+                genai_types.Part.from_bytes(data=image_data, mime_type="image/jpeg")
+            ],
+            config=genai_types.GenerateContentConfig(thinking_config=genai_types.ThinkingConfig(thinking_budget=0))
+        )
 
         log_debug("Received first-pass response from Gemini", {
             "response_text": response.text[:200] + "..." if len(response.text) > 200 else response.text
@@ -611,9 +618,9 @@ async def _enhance_single_batch(
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
 
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"thinking_config": {"thinking_budget": 0}})
+        from app.core.clients import get_gemini_client
+        from google.genai import types as genai_types
+        gemini_client = get_gemini_client()
 
         # Read image file
         with open(image_path, 'rb') as f:
@@ -623,10 +630,14 @@ async def _enhance_single_batch(
         prompt = build_enhancement_prompt(batch_records, valid_majors)
 
         # Process with Gemini
-        response = model.generate_content([
-            prompt,
-            {"mime_type": "image/jpeg", "data": image_data}
-        ])
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                prompt,
+                genai_types.Part.from_bytes(data=image_data, mime_type="image/jpeg")
+            ],
+            config=genai_types.GenerateContentConfig(thinking_config=genai_types.ThinkingConfig(thinking_budget=0))
+        )
 
         # Parse JSON response
         response_text = response.text.strip()
