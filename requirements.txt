@@ -13,14 +13,12 @@ ecdsa==0.19.1
 email_validator==2.2.0
 exceptiongroup==1.2.2
 fastapi==0.109.1
-google-ai-generativelanguage>=0.6.15
 google-api-core==2.24.2
 google-api-python-client==2.170.0
 google-auth==2.40.0
 google-auth-httplib2==0.2.0
 google-cloud-documentai==2.24.1
 google-cloud-vision==3.5.0
-google-generativeai==0.8.6
 google-genai>=1.47.0
 googleapis-common-protos==1.70.0
 googlemaps==4.10.0
@@ -30,7 +28,7 @@ grpcio-status==1.62.3
 h11==0.14.0
 httpcore>=1.0.0
 httplib2==0.22.0
-httpx>=0.26.0,<0.28.0
+httpx>=0.28.1,<1.0.0
 idna==3.10
 numpy==2.0.2
 opencv-python==4.11.0.86
@@ -73,7 +71,7 @@ typing_extensions>=4.14.0
 uritemplate==4.1.1
 urllib3==2.4.0
 uvicorn==0.27.0
-websockets==12.0
+websockets>=13.0.0,<15.1.0
 sentry-sdk[fastapi]>=2.0.0
 qrcode==7.4.2
 twilio>=9.0.0
