@@ -348,6 +348,17 @@ async def submit_universal_event(request: UniversalEventSubmissionRequest) -> Di
             event_id=created_event.get("id")
         )
 
+        # Send confirmation to secondary contact if provided
+        if request.contact_email_secondary:
+            notification_service.send_event_submission_confirmation(
+                recipient_email=request.contact_email_secondary,
+                recipient_name=request.contact_name_secondary or request.contact_name,
+                event_name=request.name,
+                event_date=request.event_date.isoformat(),
+                event_id=created_event.get("id"),
+                primary_contact_name=request.contact_name
+            )
+
         return {
             "success": True,
             "event_id": created_event.get("id"),

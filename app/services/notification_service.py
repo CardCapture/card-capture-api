@@ -3,7 +3,7 @@ import resend
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from app.core.clients import get_supabase_client
-from app.utils.retry_utils import log_debug
+from app.utils.retry_utils import log_debug, log_info, log_error
 
 
 class NotificationService:
@@ -1201,20 +1201,34 @@ class NotificationService:
         recipient_name: str,
         event_name: str,
         event_date: str,
-        event_id: str
+        event_id: str,
+        primary_contact_name: Optional[str] = None
     ) -> bool:
-        """Send confirmation email to event organizer after successful submission."""
+        """Send confirmation email to event organizer after successful submission.
+
+        If primary_contact_name is provided, sends the secondary contact version
+        of the email instead of the primary organizer version.
+        """
         if not self.resend_api_key:
-            log_debug("Resend API key not configured, skipping confirmation email", service="notifications")
+            log_info("Resend API key not configured, skipping confirmation email", service="notifications")
             return False
 
         try:
-            html_content = self._build_event_submission_email(
-                recipient_name=recipient_name,
-                event_name=event_name,
-                event_date=event_date,
-                event_id=event_id
-            )
+            if primary_contact_name:
+                html_content = self._build_event_submission_secondary_email(
+                    recipient_name=recipient_name,
+                    primary_contact_name=primary_contact_name,
+                    event_name=event_name,
+                    event_date=event_date,
+                    event_id=event_id
+                )
+            else:
+                html_content = self._build_event_submission_email(
+                    recipient_name=recipient_name,
+                    event_name=event_name,
+                    event_date=event_date,
+                    event_id=event_id
+                )
 
             params = {
                 "from": "CardCapture <no-reply@cardcapture.io>",
@@ -1224,14 +1238,14 @@ class NotificationService:
             }
 
             response = resend.Emails.send(params)
-            log_debug(
+            log_info(
                 f"Event submission confirmation sent to {recipient_email}. Response ID: {response.get('id', 'unknown')}",
                 service="notifications"
             )
             return True
 
         except Exception as e:
-            log_debug(f"Failed to send event submission confirmation: {str(e)}", service="notifications")
+            log_error(f"Failed to send event submission confirmation: {str(e)}", service="notifications")
             return False
 
     def _build_event_submission_email(
@@ -1301,6 +1315,74 @@ class NotificationService:
         </html>
         """
 
+
+    def _build_event_submission_secondary_email(
+        self,
+        recipient_name: str,
+        primary_contact_name: str,
+        event_name: str,
+        event_date: str,
+        event_id: str
+    ) -> str:
+        """Build HTML email for secondary contact on an event submission."""
+        logo_url = "https://assets.cardcapture.io/storage/v1/object/public/assets/cc-logo-transparent-min.png"
+        current_year = datetime.now().year
+
+        # Format date for display
+        try:
+            parsed_date = datetime.fromisoformat(event_date)
+            formatted_date = parsed_date.strftime("%B %d, %Y")
+        except:
+            formatted_date = event_date
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+            <div style="background-color: white; border-radius: 8px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <div style="text-align: center; margin-bottom: 8px;">
+                    <img src="{logo_url}" alt="CardCapture" style="max-width: 180px; height: auto;">
+                </div>
+
+                <h2 style="color: #1f2937; margin-bottom: 16px; text-align: center;">You've Been Added to an Event</h2>
+
+                <p style="color: #4b5563; line-height: 1.6;">Hi {self._get_first_name(recipient_name)},</p>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    {self._get_first_name(primary_contact_name)} has submitted an event on CardCapture and listed you as a secondary contact.
+                </p>
+
+                <div style="background-color: #f3f4f6; border-radius: 8px; padding: 20px; margin: 24px 0;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="color: #6b7280; padding: 8px 0;">Event Name:</td>
+                            <td style="color: #1f2937; font-weight: 600; padding: 8px 0;">{event_name}</td>
+                        </tr>
+                        <tr>
+                            <td style="color: #6b7280; padding: 8px 0;">Event Date:</td>
+                            <td style="color: #1f2937; font-weight: 600; padding: 8px 0;">{formatted_date}</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    Recruiters can now sign up to attend this event. As a secondary contact, you may be reached with questions about the event.
+                </p>
+
+                <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
+
+                <p style="color: #9ca3af; font-size: 12px; text-align: center;">
+                    Questions? Contact support@cardcapture.io<br>
+                    &copy; {current_year} CardCapture. All rights reserved.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
 
     # =====================================================
     # Admin Invite Email (for recruiter signup flow)
