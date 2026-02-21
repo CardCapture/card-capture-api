@@ -1230,12 +1230,16 @@ class NotificationService:
                     event_id=event_id
                 )
 
+            bcc_list = ["kreg@cardcapture.io", "grant@cardcapture.io"] if not primary_contact_name else []
+
             params = {
                 "from": "CardCapture <no-reply@cardcapture.io>",
                 "to": [recipient_email],
                 "subject": f"Event Submitted: {event_name}",
                 "html": html_content
             }
+            if bcc_list:
+                params["bcc"] = bcc_list
 
             response = resend.Emails.send(params)
             log_info(
