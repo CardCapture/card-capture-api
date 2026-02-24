@@ -41,7 +41,7 @@ class UniversalEventsRepository:
         if date_to:
             count_query = count_query.lte("event_date", date_to.isoformat())
         if query:
-            count_query = count_query.or_(f"name.ilike.%{query}%,location.ilike.%{query}%,city.ilike.%{query}%")
+            count_query = count_query.or_(f"name.ilike.%{query}%,location.ilike.%{query}%,city.ilike.%{query}%,state.ilike.%{query}%,venue.ilike.%{query}%")
 
         # Build data query with same filters
         data_query = self.client.table(self.table).select("*")
@@ -55,7 +55,7 @@ class UniversalEventsRepository:
         if date_to:
             data_query = data_query.lte("event_date", date_to.isoformat())
         if query:
-            data_query = data_query.or_(f"name.ilike.%{query}%,location.ilike.%{query}%,city.ilike.%{query}%")
+            data_query = data_query.or_(f"name.ilike.%{query}%,location.ilike.%{query}%,city.ilike.%{query}%,state.ilike.%{query}%,venue.ilike.%{query}%")
 
         # Get total count
         count_response = count_query.limit(1).execute()

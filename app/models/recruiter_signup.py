@@ -62,6 +62,7 @@ class RecruiterSignupRequest(BaseModel):
     last_name: str = Field(..., min_length=1, max_length=100)
     school_selection: SchoolSelection
     universal_event_ids: list[str] = Field(..., min_length=1, max_length=10, description="List of universal event IDs to purchase")
+    captcha_token: Optional[str] = None
 
 
 class RecruiterSignupResponse(BaseModel):

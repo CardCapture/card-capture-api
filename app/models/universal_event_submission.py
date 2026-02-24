@@ -35,6 +35,9 @@ class UniversalEventSubmissionRequest(BaseModel):
     contact_email_secondary: Optional[EmailStr] = None
     contact_phone_secondary: Optional[str] = None
 
+    # CAPTCHA
+    captcha_token: Optional[str] = None
+
     # Inquiry cards mailing address (when needs_inquiry_cards is True)
     inquiry_cards_same_as_event_address: Optional[bool] = True
     inquiry_cards_address: Optional[str] = None

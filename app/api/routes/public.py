@@ -3,8 +3,8 @@ Public API routes for recruiter self-service signup.
 No authentication required.
 """
 
-from fastapi import APIRouter, HTTPException, Query
-from typing import Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Query, Request
+from typing import Optional, Dict, Any, List
 
 from app.utils.retry_utils import log_debug, log_info
 from app.models.recruiter_signup import (
@@ -17,6 +17,7 @@ from app.models.universal_event_submission import (
     UniversalEventSubmissionRequest,
     UniversalEventSubmissionResponse
 )
+from app.core.captcha import captcha_service
 from app.services.recruiter_signup_service import (
     RecruiterSignupService,
     get_public_schools,
@@ -221,6 +222,35 @@ async def list_schools(
         )
 
 
+@router.get("/universal-events/states")
+async def list_event_states() -> List[str]:
+    """
+    Get distinct states from upcoming universal events.
+    Returns a sorted list of state abbreviations.
+    """
+    from datetime import date
+    from app.core.clients import get_supabase_client
+
+    try:
+        client = get_supabase_client()
+        today = date.today().isoformat()
+        response = (
+            client.table("universal_events")
+            .select("state")
+            .eq("status", "active")
+            .gte("event_date", today)
+            .not_.is_("state", "null")
+            .execute()
+        )
+        states = sorted({row["state"] for row in response.data if row.get("state")})
+        return states
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch states: {str(e)}"
+        )
+
+
 @router.get("/universal-events/search", response_model=UniversalEventSearchResponse)
 async def search_events(
     q: Optional[str] = Query(None, description="Text search (name, location, city)"),
@@ -290,7 +320,7 @@ async def get_event(event_id: str) -> Dict[str, Any]:
 
 
 @router.post("/universal-events", response_model=UniversalEventSubmissionResponse)
-async def submit_universal_event(request: UniversalEventSubmissionRequest) -> Dict[str, Any]:
+async def submit_universal_event(request_body: UniversalEventSubmissionRequest, request: Request) -> Dict[str, Any]:
     """
     Submit a new universal event.
 
@@ -302,37 +332,41 @@ async def submit_universal_event(request: UniversalEventSubmissionRequest) -> Di
     from app.services.notification_service import NotificationService
 
     try:
+        # CAPTCHA verification
+        client_ip = request.client.host if request.client else None
+        await captcha_service.verify(request_body.captcha_token, client_ip, required=False)
+
         repo = UniversalEventsRepository()
 
         # Prepare event data
         event_data = {
-            "name": request.name,
-            "event_date": request.event_date.isoformat(),
-            "contact_name": request.contact_name,
-            "contact_email": request.contact_email,
-            "contact_phone": request.contact_phone,
-            "start_time": request.start_time.isoformat() if request.start_time else None,
-            "end_time": request.end_time.isoformat() if request.end_time else None,
-            "location": request.location,
-            "address": request.address,
-            "city": request.city,
-            "state": request.state or "TX",
-            "zip": request.zip,
-            "description": request.description,
-            "needs_inquiry_cards": request.needs_inquiry_cards or False,
-            "expected_students": request.expected_students,
+            "name": request_body.name,
+            "event_date": request_body.event_date.isoformat(),
+            "contact_name": request_body.contact_name,
+            "contact_email": request_body.contact_email,
+            "contact_phone": request_body.contact_phone,
+            "start_time": request_body.start_time.isoformat() if request_body.start_time else None,
+            "end_time": request_body.end_time.isoformat() if request_body.end_time else None,
+            "location": request_body.location,
+            "address": request_body.address,
+            "city": request_body.city,
+            "state": request_body.state or "TX",
+            "zip": request_body.zip,
+            "description": request_body.description,
+            "needs_inquiry_cards": request_body.needs_inquiry_cards or False,
+            "expected_students": request_body.expected_students,
             "status": "active",
             # Secondary contact
-            "contact_name_secondary": request.contact_name_secondary,
-            "contact_email_secondary": request.contact_email_secondary,
-            "contact_phone_secondary": request.contact_phone_secondary,
+            "contact_name_secondary": request_body.contact_name_secondary,
+            "contact_email_secondary": request_body.contact_email_secondary,
+            "contact_phone_secondary": request_body.contact_phone_secondary,
             # Inquiry cards mailing address
-            "inquiry_cards_same_as_event_address": request.inquiry_cards_same_as_event_address if request.needs_inquiry_cards else None,
-            "inquiry_cards_address": request.inquiry_cards_address if request.needs_inquiry_cards else None,
-            "inquiry_cards_city": request.inquiry_cards_city if request.needs_inquiry_cards else None,
-            "inquiry_cards_state": request.inquiry_cards_state if request.needs_inquiry_cards else None,
-            "inquiry_cards_zip": request.inquiry_cards_zip if request.needs_inquiry_cards else None,
-            "inquiry_cards_attention": request.inquiry_cards_attention if request.needs_inquiry_cards else None,
+            "inquiry_cards_same_as_event_address": request_body.inquiry_cards_same_as_event_address if request_body.needs_inquiry_cards else None,
+            "inquiry_cards_address": request_body.inquiry_cards_address if request_body.needs_inquiry_cards else None,
+            "inquiry_cards_city": request_body.inquiry_cards_city if request_body.needs_inquiry_cards else None,
+            "inquiry_cards_state": request_body.inquiry_cards_state if request_body.needs_inquiry_cards else None,
+            "inquiry_cards_zip": request_body.inquiry_cards_zip if request_body.needs_inquiry_cards else None,
+            "inquiry_cards_attention": request_body.inquiry_cards_attention if request_body.needs_inquiry_cards else None,
         }
 
         # Create event
@@ -341,22 +375,22 @@ async def submit_universal_event(request: UniversalEventSubmissionRequest) -> Di
         # Send confirmation email
         notification_service = NotificationService()
         notification_service.send_event_submission_confirmation(
-            recipient_email=request.contact_email,
-            recipient_name=request.contact_name,
-            event_name=request.name,
-            event_date=request.event_date.isoformat(),
+            recipient_email=request_body.contact_email,
+            recipient_name=request_body.contact_name,
+            event_name=request_body.name,
+            event_date=request_body.event_date.isoformat(),
             event_id=created_event.get("id")
         )
 
         # Send confirmation to secondary contact if provided
-        if request.contact_email_secondary:
+        if request_body.contact_email_secondary:
             notification_service.send_event_submission_confirmation(
-                recipient_email=request.contact_email_secondary,
-                recipient_name=request.contact_name_secondary or request.contact_name,
-                event_name=request.name,
-                event_date=request.event_date.isoformat(),
+                recipient_email=request_body.contact_email_secondary,
+                recipient_name=request_body.contact_name_secondary or request_body.contact_name,
+                event_name=request_body.name,
+                event_date=request_body.event_date.isoformat(),
                 event_id=created_event.get("id"),
-                primary_contact_name=request.contact_name
+                primary_contact_name=request_body.contact_name
             )
 
         return {
@@ -365,6 +399,8 @@ async def submit_universal_event(request: UniversalEventSubmissionRequest) -> Di
             "message": "Event submitted successfully! A confirmation email has been sent."
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -373,7 +409,7 @@ async def submit_universal_event(request: UniversalEventSubmissionRequest) -> Di
 
 
 @router.post("/recruiter-signup", response_model=RecruiterSignupResponse)
-async def recruiter_signup(request: RecruiterSignupRequest) -> RecruiterSignupResponse:
+async def recruiter_signup(request_body: RecruiterSignupRequest, request: Request) -> RecruiterSignupResponse:
     """
     Register as a new recruiter and purchase event access.
 
@@ -392,8 +428,12 @@ async def recruiter_signup(request: RecruiterSignupRequest) -> RecruiterSignupRe
     - If linked to existing school, create link request for admin approval
     """
     try:
+        # CAPTCHA verification
+        client_ip = request.client.host if request.client else None
+        await captcha_service.verify(request_body.captcha_token, client_ip, required=False)
+
         service = RecruiterSignupService()
-        result = await service.signup_recruiter(request)
+        result = await service.signup_recruiter(request_body)
         return result
     except HTTPException:
         raise
