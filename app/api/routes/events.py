@@ -64,7 +64,7 @@ async def create_event(payload: EventCreatePayload, user=Depends(get_current_use
 @router.post("/events/purchase", response_model=AdminEventPurchaseResponse)
 async def purchase_events(request: AdminEventPurchaseRequest, user=Depends(get_current_user)):
     """
-    Purchase events for an authenticated admin user.
+    Purchase events for an authenticated admin or recruiter.
     Creates a Stripe checkout session for the selected universal events.
     """
     try:
@@ -75,12 +75,12 @@ async def purchase_events(request: AdminEventPurchaseRequest, user=Depends(get_c
             detail="Payment processing not available"
         )
 
-    # Verify user is an admin
+    # Verify user is an admin or recruiter
     user_roles = user.get("role", [])
-    if "admin" not in user_roles:
+    if not any(r in user_roles for r in ["admin", "recruiter"]):
         raise HTTPException(
             status_code=403,
-            detail="Only admins can purchase events"
+            detail="Only admins and recruiters can purchase events"
         )
 
     user_id = user.get("id")  # Profile uses 'id' not 'user_id'

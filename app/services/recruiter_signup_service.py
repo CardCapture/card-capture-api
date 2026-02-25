@@ -355,11 +355,11 @@ class RecruiterSignupService:
             if "already registered" in error_msg.lower():
                 raise HTTPException(
                     status_code=409,
-                    detail="Email already registered"
+                    detail="An account with this email already exists. Please log in instead, or contact support if you need help accessing your account."
                 )
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to create user: {error_msg}"
+                detail="Something went wrong while creating your account. Please try again or contact support."
             )
 
     def _create_or_update_profile(

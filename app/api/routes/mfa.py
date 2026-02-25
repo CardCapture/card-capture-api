@@ -253,13 +253,13 @@ async def verify_mfa_challenge(
 
         if response.status_code != 200:
             error_text = response.text.lower()
+            log_debug(f"Auth API: Verification failed (HTTP {response.status_code}): {response.text}", service="mfa")
             if "invalid" in error_text or "incorrect" in error_text:
                 raise HTTPException(status_code=400, detail="INVALID_CODE")
             elif "expired" in error_text:
                 raise HTTPException(status_code=400, detail="CODE_EXPIRED")
             else:
-                log_debug(f"Auth API: Verification failed: {response.text}", service="mfa")
-                raise HTTPException(status_code=response.status_code, detail="Verification failed")
+                raise HTTPException(status_code=400, detail="Verification failed. Please request a new code and try again.")
 
         return response.json()
 

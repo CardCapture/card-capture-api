@@ -147,21 +147,16 @@ def delete_user_db(supabase_auth, supabase_client, user_id):
     """
     Delete a user and all associated data.
 
-    Note: The following tables have CASCADE DELETE foreign keys and will be
-    automatically cleaned up when auth.users is deleted:
+    Deleting from auth.users triggers CASCADE DELETE on all related tables:
+    - profiles
     - user_mfa_settings
     - trusted_devices
     - mfa_events
     - mfa_rate_limits
     - processing_jobs
-
-    However, we still manually clean up profiles since it may have additional constraints.
+    - event_purchases
+    - account_link_requests
     """
-    # First delete from profiles table
-    profile_result = supabase_client.table("profiles").delete().eq("id", user_id).execute()
-
-    # Delete from auth - CASCADE DELETE will automatically clean up related tables
-    # (processing_jobs, user_mfa_settings, trusted_devices, mfa_events, mfa_rate_limits)
     auth_result = supabase_auth.auth.admin.delete_user(user_id)
 
-    return {"profile_deleted": profile_result, "auth_deleted": auth_result} 
+    return {"auth_deleted": auth_result} 

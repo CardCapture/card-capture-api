@@ -226,7 +226,4 @@ async def delete_user_service(user_id: str, user):
         log_debug(f"Error type: {type(e)}", service="users")
         log_debug(f"Error details: {e.__dict__ if hasattr(e, '__dict__') else 'No details available'}", service="users")
 
-        # Note: Foreign key constraint errors should no longer occur since we added CASCADE DELETE
-        # to all relevant tables (processing_jobs, user_mfa_settings, trusted_devices, etc.)
-
-        raise HTTPException(status_code=500, detail=f"Database error deleting user: {str(e)}") 
+        raise HTTPException(status_code=500, detail="Something went wrong while deleting this user. Please try again or contact support.") 
