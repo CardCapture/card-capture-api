@@ -156,7 +156,7 @@ class TestSignupAuthFailure:
                 run_async(service.signup_recruiter(signup_request))
 
             assert exc_info.value.status_code == 500
-            assert "Failed to create user" in str(exc_info.value.detail)
+            assert "Something went wrong while creating your account" in str(exc_info.value.detail)
 
     @pytest.mark.unit
     def test_duplicate_email_auth_raises_409(
