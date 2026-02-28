@@ -190,7 +190,7 @@ class RegistrationService:
             log_debug("Twilio credentials incomplete", service="registration")
             raise HTTPException(status_code=500, detail="SMS service not configured")
 
-        magic_url = f"{self.frontend_url}/register/verify?token={token}"
+        magic_url = f"{self.frontend_url}/register/verify/{token}"
         body = f"CardCapture: Tap to register\n{magic_url}"
 
         try:
