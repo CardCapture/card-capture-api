@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from fastapi import HTTPException
 from app.core.clients import get_supabase_client
-from app.repositories.students_repository import get_student_by_email, upsert_student, create_token_for_student
+from app.repositories.students_repository import get_student_by_email, get_student_by_phone, upsert_student, create_token_for_student
 from app.repositories.auth_repository import create_magic_link_db, validate_magic_link_db, consume_magic_link_db
 from app.utils.retry_utils import log_debug
 from app.utils.qr_utils import qr_png_data_uri
@@ -135,6 +135,77 @@ class RegistrationService:
             "is_returning": is_returning_user
         }
     
+    async def start_sms_registration(self, phone: str) -> Dict[str, Any]:
+        """Start registration via SMS magic link
+
+        Returns:
+            Success status and message
+        """
+        # Validate phone (required for SMS flow)
+        if not phone or not self._validate_phone(phone):
+            raise HTTPException(status_code=400, detail="Please enter a valid US phone number (10 digits)")
+
+        # Check if student already exists by phone
+        existing_student = get_student_by_phone(phone)
+        is_returning_user = existing_student is not None
+
+        # Create magic link with placeholder email (SMS-based, no email needed yet)
+        placeholder_email = f"sms:{phone}@placeholder.local"
+        token = create_magic_link_db(
+            self.supabase,
+            placeholder_email,
+            "registration",
+            {"phone": phone, "is_returning": is_returning_user}
+        )
+
+        # Send SMS with magic link
+        await self._send_registration_sms(phone, token)
+
+        # Log metric
+        await self._log_metric(
+            funnel_step="sms_started",
+            source_method="sms_link",
+            metadata={"phone_last4": phone[-4:] if len(phone) >= 4 else "****", "is_returning": is_returning_user}
+        )
+
+        return {
+            "success": True,
+            "message": "Check your phone for the registration link",
+            "is_returning": is_returning_user
+        }
+
+    async def _send_registration_sms(self, phone: str, token: str):
+        """Send registration magic link via SMS using Twilio"""
+        from app.services.students_service import _format_e164
+
+        twilio_sid = os.getenv("TWILIO_SID")
+        if not twilio_sid:
+            magic_url = f"{self.frontend_url}/register/verify?token={token}"
+            log_debug(f"TWILIO_SID not set; skipping SMS. Manual link: {magic_url}", service="registration")
+            raise HTTPException(status_code=500, detail="SMS service not configured")
+
+        twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+        messaging_service_sid = os.getenv("TWILIO_MESSAGING_SERVICE_SID")
+        if not twilio_auth_token or not messaging_service_sid:
+            log_debug("Twilio credentials incomplete", service="registration")
+            raise HTTPException(status_code=500, detail="SMS service not configured")
+
+        magic_url = f"{self.frontend_url}/register/verify?token={token}"
+        body = f"CardCapture: Tap to register\n{magic_url}"
+
+        try:
+            from twilio.rest import Client
+            client = Client(twilio_sid, twilio_auth_token)
+            client.messages.create(
+                messaging_service_sid=messaging_service_sid,
+                to=_format_e164(phone),
+                body=body,
+            )
+            log_debug(f"Registration SMS sent to ***{phone[-4:]}", service="registration")
+        except Exception as e:
+            log_debug(f"Twilio SMS send failed: {str(e)}", service="registration")
+            raise HTTPException(status_code=500, detail="Failed to send registration SMS")
+
     async def verify_event_code(self, code: str) -> Dict[str, Any]:
         """Verify an event code
         
@@ -225,10 +296,11 @@ class RegistrationService:
             raise HTTPException(status_code=400, detail="Invalid phone number format")
         
         # Determine verification status based on session type
-        verified = session_data["session_type"] == "magic_link"
+        verified = session_data["session_type"] in ("magic_link", "sms_link")
         source_method = session_data["session_type"]
-        
+
         # For magic link sessions, email should match session email
+        # Skip this check for SMS sessions since email wasn't used for verification
         if source_method == "magic_link" and session_data.get("email") != form_data["email"]:
             raise HTTPException(status_code=400, detail="Email mismatch with session")
         

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request, Response, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 from typing import Optional, Dict, Any
 from app.core.captcha import captcha_service
-from app.core.rate_limiter import email_start_limiter, email_hourly_limiter, code_verify_limiter, form_submit_limiter
+from app.core.rate_limiter import email_start_limiter, email_hourly_limiter, code_verify_limiter, form_submit_limiter, sms_start_limiter, sms_hourly_limiter
 from app.core.session_manager import form_session_manager
 from app.services.registration_service import registration_service
 from app.repositories.auth_repository import validate_magic_link_db, consume_magic_link_db
@@ -15,6 +15,11 @@ router = APIRouter(prefix="/api/register", tags=["registration"])
 
 class EmailStartRequest(BaseModel):
     email: EmailStr
+    captcha_token: Optional[str] = None
+
+
+class SmsStartRequest(BaseModel):
+    phone: str
     captcha_token: Optional[str] = None
 
 
@@ -96,6 +101,44 @@ async def start_email_registration(
         raise HTTPException(status_code=500, detail="Failed to start registration")
 
 
+@router.post("/start-sms")
+async def start_sms_registration(
+    request: Request,
+    body: SmsStartRequest
+):
+    """Start registration with SMS (magic link via text)"""
+    try:
+        # IP rate limiting
+        if not await sms_start_limiter.check_ip_limit(request, "sms_start"):
+            await sms_start_limiter.record_attempt(request, "sms_start", phone=body.phone, success=False, error_reason="ip_rate_limit")
+            raise HTTPException(status_code=429, detail="Too many attempts. Please wait a few minutes and try again.")
+
+        # Phone rate limiting
+        if not await sms_hourly_limiter.check_phone_limit(body.phone, "sms_start"):
+            await sms_start_limiter.record_attempt(request, "sms_start", phone=body.phone, success=False, error_reason="phone_rate_limit")
+            raise HTTPException(status_code=429, detail="Too many attempts for this phone number. Please wait and try again.")
+
+        # Record successful attempt
+        await sms_start_limiter.record_attempt(request, "sms_start", phone=body.phone, success=True)
+
+        # CAPTCHA verification (optional, same as email)
+        client_ip = request.client.host if request.client else None
+        log_debug(f"SMS CAPTCHA token received: {body.captcha_token is not None}, IP: {client_ip}", service="registration_api")
+        await captcha_service.verify(body.captcha_token, client_ip, required=False)
+
+        # Start SMS registration
+        result = await registration_service.start_sms_registration(body.phone)
+
+        log_debug(f"SMS registration started for ***{body.phone[-4:]}", service="registration_api")
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_debug(f"SMS registration error: {str(e)}", service="registration_api")
+        raise HTTPException(status_code=500, detail="Failed to start registration")
+
+
 @router.post("/verify-event-code")
 async def verify_event_code(
     request: Request,
@@ -152,27 +195,38 @@ async def verify_magic_link(
         magic_link = validate_magic_link_db(supabase, token)
         if not magic_link or magic_link["type"] != "registration":
             raise HTTPException(status_code=400, detail="Invalid or expired registration link")
-        
-        # Create form session
+
+        # Detect SMS-based magic links by checking metadata for phone
+        metadata = magic_link.get("metadata", {})
+        phone = metadata.get("phone")
+        is_sms = phone is not None
+
+        # Create form session with appropriate type
         session_token = await form_session_manager.create_session(
-            session_type="magic_link",
-            email=magic_link["email"],
-            metadata=magic_link.get("metadata", {})
+            session_type="sms_link" if is_sms else "magic_link",
+            email=None if is_sms else magic_link["email"],
+            metadata=metadata
         )
-        
+
         # Consume magic link
         consume_magic_link_db(supabase, token)
-        
+
         # Set session cookie
         form_session_manager.set_session_cookie(response, session_token)
-        
-        log_debug(f"Magic link verified for {magic_link['email']}", service="registration_api")
-        return {
+
+        log_identifier = f"phone ***{phone[-4:]}" if is_sms else magic_link["email"]
+        log_debug(f"Magic link verified for {log_identifier}", service="registration_api")
+
+        result = {
             "success": True,
-            "email": magic_link["email"],
             "redirect": "/register/form",
             "session_token": session_token
         }
+        if is_sms:
+            result["phone"] = phone
+        else:
+            result["email"] = magic_link["email"]
+        return result
         
     except HTTPException:
         raise
@@ -184,7 +238,7 @@ async def verify_magic_link(
 @router.get("/form-session")
 async def get_form_session(request: Request):
     """Get current form session data, including existing student data if found"""
-    from app.repositories.students_repository import get_student_by_email
+    from app.repositories.students_repository import get_student_by_email, get_student_by_phone
 
     try:
         log_debug(f"Form session request from {request.client.host if request.client else 'unknown'}", service="registration_api")
@@ -193,18 +247,26 @@ async def get_form_session(request: Request):
         if not session:
             raise HTTPException(status_code=401, detail="No valid session")
 
+        metadata = session.get("metadata", {})
         response_data = {
             "session_type": session["session_type"],
             "email": session.get("email"),
-            "metadata": session.get("metadata", {})
+            "metadata": metadata
         }
 
         # Check for existing student and include their data for pre-filling
         email = session.get("email")
+        phone = metadata.get("phone")
+
         if email:
             existing_student = get_student_by_email(email)
             if existing_student:
                 log_debug(f"Found existing student for {email}, including data for pre-fill", service="registration_api")
+                response_data["existing_student"] = existing_student
+        elif phone:
+            existing_student = get_student_by_phone(phone)
+            if existing_student:
+                log_debug(f"Found existing student for phone ***{phone[-4:]}, including data for pre-fill", service="registration_api")
                 response_data["existing_student"] = existing_student
 
         return response_data

@@ -36,6 +36,10 @@ class RateLimiter:
     def _hash_email(self, email: str) -> str:
         """Hash email for privacy in logs"""
         return hashlib.sha256(email.lower().encode()).hexdigest()[:16]
+
+    def _hash_phone(self, phone: str) -> str:
+        """Hash phone for privacy in logs"""
+        return hashlib.sha256(phone.encode()).hexdigest()[:16]
     
     async def check_ip_limit(self, request: Request, attempt_type: str) -> bool:
         """Check if IP has exceeded rate limit
@@ -111,17 +115,53 @@ class RateLimiter:
             # Fail open on database errors
             return True
     
+    async def check_phone_limit(self, phone: str, attempt_type: str) -> bool:
+        """Check if phone has exceeded rate limit
+
+        Returns:
+            True if within limits, False if exceeded
+        """
+        window_start = datetime.utcnow() - timedelta(minutes=self.window_minutes)
+        phone_hash = self._hash_phone(phone)
+
+        try:
+            response = self.supabase.table("registration_attempts").select(
+                "id", count="exact"
+            ).eq(
+                "phone", phone
+            ).eq(
+                "attempt_type", attempt_type
+            ).gte(
+                "created_at", window_start.isoformat()
+            ).execute()
+
+            count = response.count or 0
+
+            if count >= self.max_attempts:
+                log_debug(
+                    f"Rate limit exceeded for phone {phone_hash}: {count}/{self.max_attempts} in {self.window_minutes}min",
+                    service="rate_limiter"
+                )
+                return False
+
+            return True
+
+        except Exception as e:
+            log_debug(f"Rate limit check error: {str(e)}", service="rate_limiter")
+            return True
+
     async def record_attempt(
-        self, 
-        request: Request, 
+        self,
+        request: Request,
         attempt_type: str,
         email: Optional[str] = None,
+        phone: Optional[str] = None,
         success: bool = False,
         error_reason: Optional[str] = None
     ):
         """Record an attempt for rate limiting"""
         ip_address = self._get_client_ip(request)
-        
+
         try:
             data = {
                 "ip_address": ip_address,
@@ -129,10 +169,12 @@ class RateLimiter:
                 "success": success,
                 "error_reason": error_reason
             }
-            
+
             if email:
                 data["email"] = email
-            
+            if phone:
+                data["phone"] = phone
+
             self.supabase.table("registration_attempts").insert(data).execute()
             
             log_debug(
@@ -147,37 +189,49 @@ class RateLimiter:
         self,
         request: Request,
         attempt_type: str,
-        email: Optional[str] = None
+        email: Optional[str] = None,
+        phone: Optional[str] = None
     ):
         """Check rate limits and record attempt if within limits
-        
+
         Raises:
             HTTPException: If rate limit exceeded
         """
         # Check IP limit
         if not await self.check_ip_limit(request, attempt_type):
             await self.record_attempt(
-                request, attempt_type, email, 
+                request, attempt_type, email, phone,
                 success=False, error_reason="ip_rate_limit"
             )
             raise HTTPException(
                 status_code=429,
                 detail="Too many attempts. Please wait a few minutes and try again."
             )
-        
+
         # Check email limit if email provided
         if email and not await self.check_email_limit(email, attempt_type):
             await self.record_attempt(
-                request, attempt_type, email,
+                request, attempt_type, email, phone,
                 success=False, error_reason="email_rate_limit"
             )
             raise HTTPException(
                 status_code=429,
                 detail="Too many attempts for this email. Please wait a few minutes and try again."
             )
-        
+
+        # Check phone limit if phone provided
+        if phone and not await self.check_phone_limit(phone, attempt_type):
+            await self.record_attempt(
+                request, attempt_type, email, phone,
+                success=False, error_reason="phone_rate_limit"
+            )
+            raise HTTPException(
+                status_code=429,
+                detail="Too many attempts for this phone number. Please wait and try again."
+            )
+
         # Record successful check (attempt will be marked success/fail later)
-        await self.record_attempt(request, attempt_type, email, success=True)
+        await self.record_attempt(request, attempt_type, email, phone, success=True)
 
 
 # Rate limiter instances for different endpoints
@@ -185,3 +239,5 @@ email_start_limiter = RateLimiter(max_attempts=20, window_minutes=1)  # 20 per m
 email_hourly_limiter = RateLimiter(max_attempts=10, window_minutes=60)  # 10 per hour per email (increased for testing)
 code_verify_limiter = RateLimiter(max_attempts=20, window_minutes=1)  # 20 per minute per IP
 form_submit_limiter = RateLimiter(max_attempts=5, window_minutes=10)  # 5 per 10 minutes
+sms_start_limiter = RateLimiter(max_attempts=5, window_minutes=1)  # 5 per minute per IP (tighter, SMS costs money)
+sms_hourly_limiter = RateLimiter(max_attempts=5, window_minutes=60)  # 5 per hour per phone
