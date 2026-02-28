@@ -155,7 +155,8 @@ class RegistrationService:
             self.supabase,
             placeholder_email,
             "registration",
-            {"phone": phone, "is_returning": is_returning_user}
+            {"phone": phone, "is_returning": is_returning_user},
+            token_length=8  # Shorter token for SMS so URL stays under 60 chars
         )
 
         # Send SMS with magic link
@@ -191,7 +192,11 @@ class RegistrationService:
             raise HTTPException(status_code=500, detail="SMS service not configured")
 
         magic_url = f"{self.frontend_url}/register/verify/{token}"
-        body = f"CardCapture: Tap to register\n{magic_url}"
+        body = (
+            f"CardCapture: Tap to complete your registration.\n"
+            f"Reply STOP to opt out.\n"
+            f"{magic_url}"
+        )
 
         try:
             from twilio.rest import Client

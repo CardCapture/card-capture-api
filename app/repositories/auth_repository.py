@@ -26,12 +26,12 @@ def generate_secure_token(length: int = 32) -> str:
     """Generate a cryptographically secure random token"""
     return secrets.token_urlsafe(length)
 
-def create_magic_link_db(supabase_client, email: str, link_type: str, metadata: dict = None):
+def create_magic_link_db(supabase_client, email: str, link_type: str, metadata: dict = None, token_length: int = 32):
     """Create a magic link token and store it in the database"""
     log_debug(f"🪄 Creating magic link for: {mask_email(email)} (type: {link_type})", service="auth")
-    
+
     # Generate secure token
-    token = generate_secure_token(32)
+    token = generate_secure_token(token_length)
     
     # Set expiry to 24 hours from now with consistent formatting
     expires_at = datetime.utcnow() + timedelta(hours=24)
