@@ -106,11 +106,14 @@ class RegistrationService:
         is_returning_user = existing_student is not None
 
         # Create magic link for registration
+        link_metadata = {"purpose": "student_registration", "is_returning": is_returning_user}
+        if is_returning_user and existing_student:
+            link_metadata["existing_student_id"] = existing_student["id"]
         token = create_magic_link_db(
             self.supabase,
             email,
             "registration",
-            {"purpose": "student_registration", "is_returning": is_returning_user}
+            link_metadata
         )
 
         # Send appropriate email based on whether user exists
@@ -151,11 +154,14 @@ class RegistrationService:
 
         # Create magic link with placeholder email (SMS-based, no email needed yet)
         placeholder_email = f"sms:{phone}@placeholder.local"
+        link_metadata = {"phone": phone, "is_returning": is_returning_user}
+        if is_returning_user and existing_student:
+            link_metadata["existing_student_id"] = existing_student["id"]
         token = create_magic_link_db(
             self.supabase,
             placeholder_email,
             "registration",
-            {"phone": phone, "is_returning": is_returning_user},
+            link_metadata,
             token_length=8  # Shorter token for SMS so URL stays under 60 chars
         )
 
@@ -304,18 +310,24 @@ class RegistrationService:
         verified = session_data["session_type"] in ("magic_link", "sms_link")
         source_method = session_data["session_type"]
 
-        # For magic link sessions, email should match session email
-        # Skip this check for SMS sessions since email wasn't used for verification
+        # Identity field validation: reject if the verified identity field was tampered with
         if source_method == "magic_link" and session_data.get("email") != form_data["email"]:
             raise HTTPException(status_code=400, detail="Email mismatch with session")
+
+        session_phone = session_data.get("metadata", {}).get("phone", "")
+        if source_method == "sms_link" and session_phone and form_data.get("cell") != session_phone:
+            raise HTTPException(status_code=400, detail="Phone number mismatch with session")
         
         # Prepare student data
         student_data = self._normalize_student_data(form_data)
         student_data["verified"] = verified
         student_data["source_method"] = source_method
         
-        # Check for existing student
-        existing = get_student_by_email(student_data["email"])
+        # Check for existing student: use phone for SMS sessions, email otherwise
+        if source_method == "sms_link" and session_phone:
+            existing = get_student_by_phone(session_phone)
+        else:
+            existing = get_student_by_email(student_data["email"])
         if existing:
             # Update existing record
             student_data["id"] = existing["id"]
