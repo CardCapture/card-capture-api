@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from supabase import create_client
+from supabase import create_client, ClientOptions
 from google.cloud import documentai_v1 as documentai
 import googlemaps
 
@@ -19,7 +19,8 @@ def get_supabase_client():
         if not SUPABASE_URL or not SUPABASE_KEY:
             raise ValueError("Missing required Supabase environment variables")
         try:
-            supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            options = ClientOptions(storage_client_timeout=120)
+            supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
         except Exception as e:
             raise RuntimeError(f"Failed to create Supabase client: {e}")
     return supabase_client

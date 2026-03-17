@@ -2,7 +2,7 @@ import os
 import mimetypes
 import uuid
 from datetime import datetime
-from app.utils.retry_utils import log_debug
+from app.utils.retry_utils import log_debug, retry_with_exponential_backoff
 
 def upload_to_supabase_storage_from_path(supabase_client, trimmed_path: str, user_id: str, original_filename: str) -> str:
     log_debug(f"[STORAGE DEBUG] === UPLOAD TO SUPABASE STORAGE ===", service="storage")
@@ -32,11 +32,20 @@ def upload_to_supabase_storage_from_path(supabase_client, trimmed_path: str, use
 
         log_debug(f"[STORAGE DEBUG] File size: {len(trimmed_bytes)} bytes", service="storage")
         
-        # Upload the file with unique path
-        res = supabase_client.storage.from_('cards-uploads').upload(
-            storage_path.replace('cards-uploads/', ''),
-            trimmed_bytes,
-            {"content-type": content_type}
+        # Upload the file with retry for transient network failures
+        def do_upload():
+            return supabase_client.storage.from_('cards-uploads').upload(
+                storage_path.replace('cards-uploads/', ''),
+                trimmed_bytes,
+                {"content-type": content_type}
+            )
+
+        res = retry_with_exponential_backoff(
+            do_upload,
+            max_retries=3,
+            base_delay=2.0,
+            operation_name="Supabase storage upload",
+            service="storage"
         )
         
         if hasattr(res, 'error') and res.error:
