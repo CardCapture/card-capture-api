@@ -3,8 +3,12 @@ Public API routes for recruiter self-service signup.
 No authentication required.
 """
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Optional, Dict, Any, List
+
+logger = logging.getLogger(__name__)
 
 from app.utils.retry_utils import log_debug, log_info
 from app.models.recruiter_signup import (
@@ -258,7 +262,7 @@ async def search_events(
     date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     city: Optional[str] = Query(None, description="Filter by city"),
-    page: int = Query(1, ge=1, description="Page number"),
+    page: int = Query(1, ge=1, le=10000, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Results per page")
 ) -> Dict[str, Any]:
     """
@@ -284,9 +288,10 @@ async def search_events(
             detail=f"Invalid date format: {str(e)}"
         )
     except Exception as e:
+        logger.error(f"Failed to search events: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to search events: {str(e)}"
+            detail="An error occurred while searching events"
         )
 
 
@@ -297,7 +302,15 @@ async def get_event(event_id: str) -> Dict[str, Any]:
 
     This is a public endpoint - no authentication required.
     """
+    import re
     from app.repositories.universal_events_repository import UniversalEventsRepository
+
+    uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+    if not uuid_pattern.match(event_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid event ID format"
+        )
 
     try:
         repo = UniversalEventsRepository()
@@ -313,9 +326,10 @@ async def get_event(event_id: str) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to get event: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get event: {str(e)}"
+            detail="An error occurred while retrieving the event"
         )
 
 
