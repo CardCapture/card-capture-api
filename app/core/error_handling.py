@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 import sentry_sdk
 import traceback
@@ -10,6 +11,21 @@ def register_exception_handlers(app: FastAPI):
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": exc.detail}
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """F20: Strip Pydantic model internals from validation errors."""
+        log_error(f"Validation error on {request.url.path}: {exc}", service="error_handler")
+        safe_errors = []
+        for err in exc.errors():
+            safe_errors.append({
+                "field": ".".join(str(loc) for loc in err.get("loc", []) if loc != "body"),
+                "message": err.get("msg", "Invalid value"),
+            })
+        return JSONResponse(
+            status_code=422,
+            content={"error": "Validation failed", "details": safe_errors}
         )
 
     @app.exception_handler(Exception)

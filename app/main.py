@@ -1,7 +1,8 @@
 import os
 import sentry_sdk
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.routes import cards_router, auth_router, uploads_router, events_router, users_router, schools_router, stripe_router, superadmin_router, sftp_router, demo_router, crm_events_router, students_router, registration_router, qr_router, high_schools_router, majors_router, notifications_router, public_router, account_linking_router
 from app.api.routes.mfa import router as mfa_router
 from app.api.routes.webhooks import router as webhooks_router
@@ -16,10 +17,30 @@ if sentry_dsn:
         environment=os.getenv("ENVIRONMENT", "development"),
     )
 
-# Trigger build - reverted to working state
-app = FastAPI(title="Card Scanner API")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+
+# F7: Disable API docs in non-development environments
+docs_kwargs = {}
+if ENVIRONMENT != "development":
+    docs_kwargs = {"docs_url": None, "redoc_url": None, "openapi_url": None}
+
+app = FastAPI(title="Card Scanner API", **docs_kwargs)
 
 register_exception_handlers(app)
+
+# F17: Security headers middleware
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if ENVIRONMENT != "development":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Add Content-Length fix middleware to prevent protocol errors
 from app.middleware.fix_content_length_middleware import ContentLengthFixMiddleware

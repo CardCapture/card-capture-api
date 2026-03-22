@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends
+import os
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 from app.core.auth import get_current_user
 from app.services.notification_service import process_notifications
@@ -8,13 +9,21 @@ from typing import Optional
 router = APIRouter(tags=["Notifications"])
 
 
+def verify_webhook_secret(x_webhook_secret: Optional[str] = Header(None)):
+    """Verify the webhook secret for cron-triggered endpoints."""
+    expected = os.getenv("NOTIFICATION_WEBHOOK_SECRET")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    if x_webhook_secret != expected:
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+
 @router.post("/notifications/process-hourly")
-async def process_hourly_notifications():
+async def process_hourly_notifications(_=Depends(verify_webhook_secret)):
     """
     Process hourly card scan notifications.
     This endpoint is called by the Supabase edge function on a cron schedule.
-
-    No authentication required as this is called by the edge function.
+    Requires X-Webhook-Secret header.
     """
     try:
         # Process notifications for all schools
@@ -28,8 +37,7 @@ async def process_hourly_notifications():
     except Exception as e:
         log_debug(f"Error processing hourly notifications: {e}", service="notifications")
         return JSONResponse(status_code=500, content={
-            "error": "Failed to process notifications",
-            "details": str(e)
+            "error": "Failed to process notifications"
         })
 
 
@@ -92,6 +100,5 @@ async def test_notification(user=Depends(get_current_user)):
     except Exception as e:
         log_debug(f"Error sending test notification: {e}", service="notifications")
         return JSONResponse(status_code=500, content={
-            "error": "Failed to send test notification",
-            "details": str(e)
+            "error": "Failed to send test notification"
         })

@@ -1,6 +1,9 @@
+import logging
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Dict, Any, Optional
 from app.repositories.high_schools_repository import HighSchoolsRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 high_schools_repo = HighSchoolsRepository()
@@ -30,7 +33,8 @@ async def search_high_schools(
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        logger.error(f"High school search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Search failed")
 
 @router.get("/{school_id}")
 async def get_school(school_id: str) -> Dict[str, Any]:
@@ -46,7 +50,8 @@ async def get_school(school_id: str) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get school: {str(e)}")
+        logger.error(f"Failed to get school: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get school")
 
 @router.get("/state/{state}")
 async def get_schools_by_state(
@@ -73,7 +78,8 @@ async def get_schools_by_state(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get schools: {str(e)}")
+        logger.error(f"Failed to get schools by state: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get schools")
 
 @router.get("/")
 async def get_school_stats() -> Dict[str, Any]:
@@ -87,4 +93,5 @@ async def get_school_stats() -> Dict[str, Any]:
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+        logger.error(f"Failed to get school stats: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get stats")

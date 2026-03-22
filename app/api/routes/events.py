@@ -351,7 +351,7 @@ async def verify_admin_purchase(session_id: str, user=Depends(get_current_user))
         raise
     except Exception as e:
         log_debug(f"Error verifying admin purchase: {str(e)}", service="events")
-        raise HTTPException(status_code=500, detail=f"Failed to verify payment: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to verify payment")
 
 
 @router.put("/events/{event_id}")
@@ -475,7 +475,7 @@ async def get_events_with_stats(
 
     except Exception as e:
         log_debug(f"Get events with stats error: {str(e)}", service="events")
-        raise HTTPException(status_code=500, detail=f"Failed to get events with stats: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get events with stats")
 
 @router.post("/events/{event_id}/codes")
 async def create_event_code(
@@ -630,23 +630,4 @@ async def delete_event_code(
         raise HTTPException(status_code=500, detail="Failed to delete event code")
 
 
-@router.get("/debug/auth-user")
-async def debug_auth_user(user=Depends(get_current_user)):
-    """Debug endpoint to check what's in auth.users for current user"""
-    try:
-        supabase_client = get_supabase_client()
-        
-        # Query auth.users directly to see what school_id this user has
-        auth_user_query = supabase_client.table("auth.users").select("id, school_id").eq("id", user["user_id"]).execute()
-        
-        return JSONResponse(status_code=200, content={
-            "user_from_token": user,
-            "auth_users_record": auth_user_query.data,
-            "debug_info": {
-                "user_id_from_token": user.get("user_id"),
-                "school_id_from_token": user.get("school_id"),
-                "roles_from_token": user.get("role", [])
-            }
-        })
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"Debug query failed: {str(e)}"}) 
+ 

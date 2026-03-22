@@ -220,9 +220,10 @@ async def list_schools(
         result = await get_public_schools(query=q, limit=limit)
         return result
     except Exception as e:
+        logger.error(f"Failed to fetch schools: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch schools: {str(e)}"
+            detail="Failed to fetch schools"
         )
 
 
@@ -249,19 +250,20 @@ async def list_event_states() -> List[str]:
         states = sorted({row["state"] for row in response.data if row.get("state")})
         return states
     except Exception as e:
+        logger.error(f"Failed to fetch states: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch states: {str(e)}"
+            detail="Failed to fetch states"
         )
 
 
 @router.get("/universal-events/search", response_model=UniversalEventSearchResponse)
 async def search_events(
-    q: Optional[str] = Query(None, description="Text search (name, location, city)"),
-    state: Optional[str] = Query(None, description="Filter by state (e.g., TX)"),
+    q: Optional[str] = Query(None, max_length=200, description="Text search (name, location, city)"),
+    state: Optional[str] = Query(None, max_length=2, description="Filter by state (e.g., TX)"),
     date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    city: Optional[str] = Query(None, description="Filter by city"),
+    city: Optional[str] = Query(None, max_length=100, description="Filter by city"),
     page: int = Query(1, ge=1, le=10000, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Results per page")
 ) -> Dict[str, Any]:
@@ -416,9 +418,10 @@ async def submit_universal_event(request_body: UniversalEventSubmissionRequest, 
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to submit event: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to submit event: {str(e)}"
+            detail="Failed to submit event"
         )
 
 
@@ -452,9 +455,10 @@ async def recruiter_signup(request_body: RecruiterSignupRequest, request: Reques
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Signup failed: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Signup failed: {str(e)}"
+            detail="Signup failed"
         )
 
 
@@ -682,7 +686,8 @@ async def verify_payment(session_id: str) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to verify payment: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to verify payment: {str(e)}"
+            detail="Failed to verify payment"
         )

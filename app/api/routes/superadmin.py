@@ -18,8 +18,8 @@ def log(msg):
     log_debug(f"[superadmin] {msg}", service="superadmin")
 
 @router.get("/health")
-async def superadmin_health():
-    """Health check for SuperAdmin system"""
+async def superadmin_health(current_user: Dict[str, Any] = Depends(verify_superadmin)):
+    """Health check for SuperAdmin system. Requires superadmin auth."""
     try:
         # Test database connection
         supabase_client = get_supabase_client()

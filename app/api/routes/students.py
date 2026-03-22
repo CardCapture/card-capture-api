@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.services.students_service import (
     register_student,
@@ -9,9 +9,11 @@ from app.services.students_service import (
     scan_student,
 )
 from app.core.auth import get_current_user
-
+from app.core.rate_limiter import RateLimiter
 
 router = APIRouter(prefix="/students", tags=["Students"])
+
+student_lookup_limiter = RateLimiter(max_attempts=30, window_minutes=1)
 
 
 @router.post("/register")
@@ -36,7 +38,8 @@ async def lookup_sms(payload: dict = Body(...)):
 
 
 @router.get("/me")
-async def get_me(token: str = Query(...)):
+async def get_me(request: Request, token: str = Query(...)):
+    await student_lookup_limiter.check_and_record(request, "student_token_lookup")
     return await get_student_profile(token)
 
 

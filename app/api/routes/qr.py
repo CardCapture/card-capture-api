@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from app.repositories.students_repository import get_student_by_token
+from app.core.auth import get_current_user
 from app.utils.qr_utils import qr_png_data_uri
 import base64
 from io import BytesIO
@@ -8,15 +9,12 @@ import qrcode
 router = APIRouter(prefix="/api/qr", tags=["qr"])
 
 @router.get("/generate/{token}")
-async def generate_qr_code(token: str):
-    """Generate QR code image for a student token"""
-    
-    # Validate token exists (optional - you might want to allow any token)
+async def generate_qr_code(token: str, user=Depends(get_current_user)):
+    """Generate QR code image for a student token. Requires authentication."""
+
     student = get_student_by_token(token)
     if not student:
-        # Still generate QR even if token doesn't exist yet
-        # This allows for pre-generation or testing
-        pass
+        raise HTTPException(status_code=404, detail="Student not found")
     
     try:
         # Generate QR code
@@ -48,15 +46,15 @@ async def generate_qr_code(token: str):
         )
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate QR code: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate QR code")
 
 @router.get("/data/{token}")
-async def get_qr_data_uri(token: str):
-    """Get QR code as data URI (for frontend display)"""
-    
+async def get_qr_data_uri(token: str, user=Depends(get_current_user)):
+    """Get QR code as data URI (for frontend display). Requires authentication."""
+
     try:
         qr_data_uri = qr_png_data_uri(token)
         return {"token": token, "qrDataUri": qr_data_uri}
-        
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate QR code: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate QR code")

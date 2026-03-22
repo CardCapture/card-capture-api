@@ -2,9 +2,28 @@
 Repository for universal_events table operations.
 """
 
+import re
 from typing import List, Dict, Any, Optional
 from datetime import date
 from app.core.clients import get_supabase_client
+
+
+def _sanitize_search_input(value: str) -> str:
+    """Sanitize search input to prevent XSS and PostgREST filter injection.
+
+    Strips HTML tags, SQL metacharacters, and PostgREST operators
+    that could be used for injection via the .or_() filter string.
+    """
+    # Strip HTML tags
+    value = re.sub(r"<[^>]*>", "", value)
+    # Remove characters that could break PostgREST filter syntax or enable injection
+    value = re.sub(r"[;\"'\\()\-]{2}", "", value)
+    # Remove remaining dangerous single chars used in PostgREST operators
+    value = re.sub(r"[<>]", "", value)
+    # Collapse whitespace and trim
+    value = re.sub(r"\s+", " ", value).strip()
+    # Limit length to prevent abuse
+    return value[:200]
 
 
 class UniversalEventsRepository:
@@ -29,6 +48,12 @@ class UniversalEventsRepository:
         Returns (events, total_count).
         Sorted by date ascending (closest to today first).
         """
+        # Sanitize text inputs
+        if query:
+            query = _sanitize_search_input(query)
+        if city:
+            city = _sanitize_search_input(city)
+
         # Build count query with filters
         count_query = self.client.table(self.table).select("*", count="exact")
         count_query = count_query.eq("status", "active")

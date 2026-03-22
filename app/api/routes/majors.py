@@ -1,6 +1,9 @@
+import logging
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Dict, Any, Optional
 from app.repositories.majors_repository import MajorsRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 majors_repo = MajorsRepository()
@@ -28,7 +31,8 @@ async def search_majors(
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        logger.error(f"Majors search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Search failed")
 
 @router.get("/{major_id}")
 async def get_major(major_id: str) -> Dict[str, Any]:
@@ -44,7 +48,8 @@ async def get_major(major_id: str) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get major: {str(e)}")
+        logger.error(f"Failed to get major: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get major")
 
 @router.get("/cip/{cip_code}")
 async def get_major_by_cip(cip_code: str) -> Dict[str, Any]:
@@ -60,7 +65,8 @@ async def get_major_by_cip(cip_code: str) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get major: {str(e)}")
+        logger.error(f"Failed to get major: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get major")
 
 @router.get("/family/{cip_family}")
 async def get_majors_by_family(
@@ -81,7 +87,8 @@ async def get_majors_by_family(
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get majors: {str(e)}")
+        logger.error(f"Failed to get majors: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get majors")
 
 @router.get("/")
 async def get_major_stats() -> Dict[str, Any]:
@@ -95,4 +102,5 @@ async def get_major_stats() -> Dict[str, Any]:
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+        logger.error(f"Failed to get majors stats: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get stats")

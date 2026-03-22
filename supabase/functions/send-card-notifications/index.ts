@@ -89,6 +89,12 @@ serve(async (req) => {
     console.log(`Target endpoint: ${notificationEndpoint}`);
     console.log(`Max retries: ${MAX_RETRIES}, Timeout per attempt: ${REQUEST_TIMEOUT_MS}ms`);
 
+    // Webhook secret for authenticating with the API
+    const webhookSecret = Deno.env.get("NOTIFICATION_WEBHOOK_SECRET");
+    if (!webhookSecret) {
+      throw new Error("NOTIFICATION_WEBHOOK_SECRET not configured");
+    }
+
     // Call the API endpoint to process notifications with retry logic
     const response = await callApiWithRetry(
       notificationEndpoint,
@@ -96,7 +102,7 @@ serve(async (req) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          // Include authorization if needed
+          "X-Webhook-Secret": webhookSecret,
           ...(Deno.env.get("API_SERVICE_KEY") ? {
             "Authorization": `Bearer ${Deno.env.get("API_SERVICE_KEY")}`
           } : {})

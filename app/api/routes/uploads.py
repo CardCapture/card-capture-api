@@ -194,7 +194,8 @@ async def upload_signup_sheet(
     except HTTPException:
         raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
+        log_debug(f"Sign-up sheet processing failed: {str(e)}", service="uploads")
         raise HTTPException(
             status_code=500,
-            detail=f"Sign-up sheet processing failed: {str(e)}"
+            detail="Sign-up sheet processing failed"
         ) 
