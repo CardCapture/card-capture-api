@@ -116,7 +116,8 @@ async def consume_magic_link_service(token: str, link_type: str):
             # Create a short-lived one-time reset token so the frontend
             # can call /auth/set-new-password without a Supabase session
             reset_token = create_magic_link_db(
-                get_supabase_client(), email, "password_reset_session"
+                get_supabase_client(), email, "password_reset",
+                metadata={"purpose": "password_reset_session"}
             )
 
             log_debug(f"Password reset token created for: {email}", service="auth")
@@ -166,8 +167,10 @@ async def set_new_password_service(payload: dict):
 
         # Validate the one-time reset token
         magic_link = validate_magic_link_db(supabase_client, reset_token)
-        if not magic_link or magic_link.get("type") != "password_reset_session":
+        if not magic_link or magic_link.get("type") != "password_reset":
             raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+        if not magic_link.get("metadata", {}).get("purpose") == "password_reset_session":
+            raise HTTPException(status_code=400, detail="Invalid reset token type")
 
         email = magic_link["email"]
 
