@@ -178,20 +178,16 @@ async def set_new_password_service(payload: dict):
         if not consume_magic_link_db(supabase_client, reset_token):
             raise HTTPException(status_code=400, detail="Reset token has already been used")
 
-        # Find user by email
-        auth_users = supabase_client.auth.admin.list_users()
-        user = None
-        for u in auth_users:
-            if u.email == email:
-                user = u
-                break
-
-        if not user:
+        # Look up user ID from profiles table (avoids paginated list_users issue)
+        profile = supabase_client.table("profiles").select("id").eq("email", email).maybe_single().execute()
+        if not profile or not profile.data:
             raise HTTPException(status_code=404, detail="User not found")
+
+        user_id = profile.data["id"]
 
         # Update password via admin API
         supabase_client.auth.admin.update_user_by_id(
-            user.id,
+            user_id,
             {"password": password}
         )
 
