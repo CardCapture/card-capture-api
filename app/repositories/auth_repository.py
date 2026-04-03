@@ -235,11 +235,20 @@ def send_magic_link_email_db(supabase_client, email: str, link_type: str, metada
         # but we'll customize the redirect URL to point to our magic link handler
         
         if link_type == "password_reset":
-            # Use Supabase's password reset but redirect to our magic link handler
-            response = supabase_client.auth.reset_password_for_email(
-                email,
-                {"redirect_to": magic_url}
-            )
+            # Send branded email via Resend
+            from app.services.notification_service import NotificationService
+            notification_service = NotificationService()
+            sent = notification_service.send_password_reset_email(email, magic_url)
+            if not sent:
+                log_debug(f"⚠️ Resend failed, falling back to Supabase email for {mask_email(email)}", service="auth")
+                response = supabase_client.auth.reset_password_for_email(
+                    email,
+                    {"redirect_to": magic_url}
+                )
+                if hasattr(response, 'error') and response.error:
+                    raise Exception(f"Failed to send email: {response.error}")
+            log_debug(f"✅ Password reset email sent to: {mask_email(email)}", service="auth")
+            return {"success": True, "magic_url": magic_url, "token": token}
         elif link_type == "invite":
             # Use Supabase's invite but redirect to our magic link handler
             response = supabase_client.auth.admin.invite_user_by_email(
