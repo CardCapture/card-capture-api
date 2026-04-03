@@ -6,6 +6,7 @@ from app.controllers.auth_controller import (
     reset_password_controller,
     validate_magic_link_controller,
     consume_magic_link_controller,
+    set_new_password_controller,
     create_user_controller
 )
 
@@ -35,6 +36,11 @@ async def consume_magic_link(
 ):
     """Process a magic link after validation"""
     return await consume_magic_link_controller(token, link_type)
+
+@router.post("/set-new-password")
+async def set_new_password(payload: dict = Body(...)):
+    """Set a new password using a one-time reset token"""
+    return await set_new_password_controller(payload)
 
 @router.post("/create-user")
 async def create_user(payload: dict = Body(...)):

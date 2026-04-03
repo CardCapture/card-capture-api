@@ -3,11 +3,12 @@ from app.core.clients import get_supabase_auth, get_supabase_client
 import os
 from jose import jwt, JWTError
 from app.repositories.auth_repository import (
-    login_db, 
-    get_user_profile_db, 
+    login_db,
+    get_user_profile_db,
     reset_password_db,
     validate_magic_link_db,
     consume_magic_link_db,
+    create_magic_link_db,
     create_temporary_session_db,
     get_frontend_url
 )
@@ -109,47 +110,23 @@ async def consume_magic_link_service(token: str, link_type: str):
         
         # Process based on link type
         if link_type == "password_reset":
-            # For password reset, create a temporary session using Supabase admin
-            try:
-                # Generate a temporary access token using admin API
-                session_response = get_supabase_client().auth.admin.generate_link({
-                    "type": "recovery",
-                    "email": email
-                })
-                
-                if hasattr(session_response, 'error') and session_response.error:
-                    log_debug(f"Session generation error: {session_response.error}", service="auth")
-                    raise HTTPException(status_code=500, detail="Failed to create reset session")
-                
-                # Mark magic link as consumed
-                consume_magic_link_db(get_supabase_client(), token)
-                
-                log_debug(f"Password reset session created for: {email}", service="auth")
-                return {
-                    "type": "password_reset",
-                    "email": email,
-                    "session": {
-                        "access_token": getattr(session_response, 'access_token', None),
-                        "refresh_token": getattr(session_response, 'refresh_token', None),
-                        "action_link": getattr(session_response, 'action_link', ''),
-                        "user_id": getattr(session_response, 'user', {}).get('id') if hasattr(session_response, 'user') else None
-                    },
-                    "redirect_url": "/reset-password",
-                    "success": True
-                }
-                
-            except Exception as session_error:
-                log_debug(f"Error creating password reset session: {str(session_error)}", service="auth")
-                # Fallback - mark as consumed and let frontend handle without session
-                consume_magic_link_db(get_supabase_client(), token)
-                
-                return {
-                    "type": "password_reset",
-                    "email": email,
-                    "redirect_url": "/reset-password",
-                    "success": True,
-                    "requires_signin": True  # Flag to indicate frontend should handle signin
-                }
+            # Mark original magic link as consumed
+            consume_magic_link_db(get_supabase_client(), token)
+
+            # Create a short-lived one-time reset token so the frontend
+            # can call /auth/set-new-password without a Supabase session
+            reset_token = create_magic_link_db(
+                get_supabase_client(), email, "password_reset_session"
+            )
+
+            log_debug(f"Password reset token created for: {email}", service="auth")
+            return {
+                "type": "password_reset",
+                "email": email,
+                "reset_token": reset_token,
+                "redirect_url": "/reset-password",
+                "success": True
+            }
             
         elif link_type == "invite":
             # Simple invite handling - just validate and return metadata
@@ -175,6 +152,55 @@ async def consume_magic_link_service(token: str, link_type: str):
     except Exception as e:
         log_debug(f"Magic link processing error: {str(e)}", service="auth")
         raise HTTPException(status_code=500, detail="Failed to process magic link")
+
+async def set_new_password_service(payload: dict):
+    """Set a new password using a one-time reset token from the magic link flow."""
+    try:
+        reset_token = payload.get("reset_token")
+        password = payload.get("password")
+
+        if not reset_token or not password:
+            raise HTTPException(status_code=400, detail="reset_token and password are required")
+
+        supabase_client = get_supabase_client()
+
+        # Validate the one-time reset token
+        magic_link = validate_magic_link_db(supabase_client, reset_token)
+        if not magic_link or magic_link.get("type") != "password_reset_session":
+            raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+        email = magic_link["email"]
+
+        # Consume the token so it can't be reused
+        if not consume_magic_link_db(supabase_client, reset_token):
+            raise HTTPException(status_code=400, detail="Reset token has already been used")
+
+        # Find user by email
+        auth_users = supabase_client.auth.admin.list_users()
+        user = None
+        for u in auth_users:
+            if u.email == email:
+                user = u
+                break
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Update password via admin API
+        supabase_client.auth.admin.update_user_by_id(
+            user.id,
+            {"password": password}
+        )
+
+        log_debug(f"Password updated successfully for: {email}", service="auth")
+        return {"success": True, "message": "Password updated successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_debug(f"Set new password error: {str(e)}", service="auth")
+        raise HTTPException(status_code=500, detail="Failed to update password")
+
 
 async def create_user_service(payload: dict):
     """Create or update user account for invite flow.
