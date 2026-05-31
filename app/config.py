@@ -71,6 +71,14 @@ ALLOWED_ORIGINS = [
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_GENERATION_CONFIG = {"thinking_config": {"thinking_budget": 0}}  # Used as kwargs to GenerateContentConfig
 
+# Vision-only extraction (DocAI removal). See docai_removal_plan.md.
+# Model used by the vision-only path; can diverge from GEMINI_MODEL if we A/B a
+# different Flash variant for the new path.
+GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
+# Global default when a school row has no use_vision_only_extraction value.
+# Lets staging turn the new path on without a per-school DB flip.
+VISION_ONLY_EXTRACTION_DEFAULT = os.getenv("VISION_ONLY_EXTRACTION_DEFAULT", "false").lower() == "true"
+
 # Frontend URL for invitation links
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 

@@ -3,7 +3,7 @@ Main card processing pipeline
 """
 import os
 import tempfile
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 
 from app.pipeline.models import (
@@ -162,11 +162,23 @@ class CardProcessingPipeline:
         3. If exists → Skip Gemini, use existing data
         4. If not exists → Run Gemini as normal
         """
+        # Read school extraction settings (resilient to the vision-only columns
+        # not existing yet, so the DocAI path is unaffected before migration).
+        school_row, _vision_columns_available = self._get_school_extraction_settings(context.school_id)
+
+        # Feature flag: per-school vision-only extraction (DocAI removal).
+        from app.config import VISION_ONLY_EXTRACTION_DEFAULT
+        use_vision_only = school_row.get("use_vision_only_extraction")
+        if use_vision_only is None:
+            use_vision_only = VISION_ONLY_EXTRACTION_DEFAULT
+
+        if use_vision_only:
+            return self._extract_vision_only(image_path, context, school_row)
+
+        # ---- DocAI + Gemini path (unchanged when the flag is off) ----
         # Get DocAI processor ID for school (fall back to default universal card processor if not set)
-        supabase = get_supabase_client()
-        school_query = supabase.table("schools").select("docai_processor_id").eq("id", context.school_id).maybe_single().execute()
         from app.config import DOCAI_PROCESSOR_ID
-        processor_id = (school_query.data.get("docai_processor_id") if school_query.data else None) or DOCAI_PROCESSOR_ID
+        processor_id = school_row.get("docai_processor_id") or DOCAI_PROCESSOR_ID
 
         # Run DocAI (now returns 4 values including serial number)
         log_debug("Running DocAI extraction", {"processor_id": processor_id}, service="pipeline")
@@ -263,6 +275,163 @@ class CardProcessingPipeline:
             stage=ProcessingStage.EXTRACTION,
             metadata=extraction_metadata
         )
+
+    def _get_school_extraction_settings(self, school_id: str) -> Tuple[Dict[str, Any], bool]:
+        """
+        Read extraction-related school settings.
+
+        Resilient to the vision-only columns (use_vision_only_extraction,
+        suggested_card_fields) not existing yet, so the DocAI path is completely
+        unaffected before the migration runs. Returns (row, vision_columns_available).
+        """
+        supabase = get_supabase_client()
+        try:
+            res = (
+                supabase.table("schools")
+                .select("docai_processor_id, card_fields, use_vision_only_extraction, suggested_card_fields")
+                .eq("id", school_id)
+                .maybe_single()
+                .execute()
+            )
+            return (res.data or {}), True
+        except Exception as e:
+            log_debug(f"Vision-only columns unavailable, falling back to DocAI settings: {e}", service="pipeline")
+            res = (
+                supabase.table("schools")
+                .select("docai_processor_id, card_fields")
+                .eq("id", school_id)
+                .maybe_single()
+                .execute()
+            )
+            return (res.data or {}), False
+
+    def _extract_vision_only(self, image_path: str, context: PipelineContext, school_row: Dict[str, Any]) -> ProcessingResult:
+        """
+        Vision-only extraction (DocAI removal path), gated by the per-school
+        use_vision_only_extraction flag.
+
+        Sends the card image to Gemini with the streamlined prompt, corrects
+        orientation, and returns the same FieldData shape as the DocAI path so
+        the enhancement and review stages are unaffected. No serial-number
+        short-circuit (Option A): repeat cards pay full Gemini cost.
+        """
+        from app.utils.image_processing import ensure_proper_orientation
+        from app.services.gemini_vision_service import (
+            process_card_with_gemini_vision,
+            save_orientation_corrected_image,
+        )
+
+        card_fields = school_row.get("card_fields") or []
+
+        # Layer 1: bake in EXIF orientation / HEIC conversion (no DocAI needed).
+        working_path = ensure_proper_orientation(image_path)
+
+        log_debug("Running vision-only extraction", {
+            "configured_field_count": len(card_fields),
+            "valid_majors_count": len(context.valid_majors),
+        }, service="pipeline")
+
+        vision_result = process_card_with_gemini_vision(
+            working_path,
+            card_fields,
+            context.valid_majors,
+        )
+        gemini_fields = vision_result.get("fields", {})
+        rotation_degrees = vision_result.get("image_rotation_degrees", 0)
+        discovered_keys = vision_result.get("discovered_keys", [])
+
+        # Layer 2: content-based orientation correction (replaces DocAI OCR
+        # rotation). Re-save an upright image so the review modal displays it
+        # correctly. The review modal also has a manual rotate control as a
+        # final fallback.
+        orientation_corrected = False
+        if rotation_degrees:
+            orientation_corrected = save_orientation_corrected_image(
+                working_path, rotation_degrees, context.original_storage_path
+            )
+
+        # Convert to FieldData objects (same mapping as the DocAI path so
+        # downstream behavior is identical).
+        fields: Dict[str, FieldData] = {}
+        for key, data in gemini_fields.items():
+            if isinstance(data, dict):
+                fields[key] = FieldData(
+                    value=data.get("value", ""),
+                    confidence=data.get("confidence", 0.0),
+                    source=data.get("source", "gemini"),
+                    enabled=data.get("enabled", True),
+                    required=data.get("required", False),
+                    original_value=data.get("original_value"),
+                )
+
+        # Capture discovered (unconfigured) fields as onboarding suggestions.
+        if discovered_keys:
+            try:
+                self._record_field_suggestions(context.school_id, school_row, discovered_keys, gemini_fields)
+            except Exception as e:
+                log_debug(f"Failed to record field suggestions: {e}", service="pipeline")
+
+        log_debug("Vision-only extraction complete", {
+            "total_fields": len(fields),
+            "image_rotation_degrees": rotation_degrees,
+            "orientation_corrected": orientation_corrected,
+            "discovered_keys": discovered_keys,
+        }, service="pipeline")
+
+        return ProcessingResult(
+            fields=fields,
+            stage=ProcessingStage.EXTRACTION,
+            metadata={
+                "extraction_mode": "vision_only",
+                "gemini_field_count": len(gemini_fields),
+                "image_rotation_degrees": rotation_degrees,
+                "orientation_corrected": orientation_corrected,
+                "discovered_field_keys": discovered_keys,
+            },
+        )
+
+    def _record_field_suggestions(
+        self,
+        school_id: str,
+        school_row: Dict[str, Any],
+        discovered_keys: list,
+        gemini_fields: Dict[str, Any],
+    ) -> None:
+        """
+        Persist discovered (unconfigured) fields to schools.suggested_card_fields
+        so they can be reviewed and accepted into card_fields later. Never adds a
+        field already configured or already suggested.
+        """
+        from app.utils.field_utils import generate_field_label
+
+        supabase = get_supabase_client()
+        existing = school_row.get("suggested_card_fields") or []
+        if not isinstance(existing, list):
+            existing = []
+        existing_keys = {s.get("key") for s in existing if isinstance(s, dict)}
+        configured_keys = {
+            f.get("key") for f in (school_row.get("card_fields") or []) if isinstance(f, dict)
+        }
+
+        added = False
+        for key in discovered_keys:
+            if not key or key in existing_keys or key in configured_keys:
+                continue
+            fd = gemini_fields.get(key, {}) or {}
+            existing.append({
+                "key": key,
+                "label": generate_field_label(key),
+                "field_type": fd.get("field_type", "text"),
+                "sample_value": fd.get("value", ""),
+            })
+            existing_keys.add(key)
+            added = True
+
+        if added:
+            supabase.table("schools").update(
+                {"suggested_card_fields": existing}
+            ).eq("id", school_id).execute()
+            log_debug("Recorded new field suggestions", {"keys": sorted(existing_keys)}, service="pipeline")
 
     def _create_result_from_existing_student(
         self,
