@@ -165,13 +165,28 @@ The pipe character "|" in major names is part of the name, not a separator.
 If no reasonable match, output "Undecided".
 Field type: "select", detected_options should list the full valid_majors list.
 
-ADDITIONAL FIELDS (discovery): if the card has a clearly-labeled field that is
-NOT in the list above (for example an intended sport, a campus visit date, a
-counselor name, a religious preference), include it too, using a snake_case
-key derived from its printed label. Use the same output shape as every other
-field. Only include an extra field when it has a clear printed label on the
-card and a value or checkbox you can read. Do NOT invent fields and do NOT add
-a field just because it is blank. When in doubt, leave it out.
+ADDITIONAL FIELDS (discovery) - CRITICAL: never drop information a student wrote.
+The card may have clearly-labeled fields that are NOT in the list above. Common
+example: a "Cell phone" line that is separate from "Home phone", or an intended
+sport, campus visit date, counselor name, parent name.
+
+You MUST output EVERY labeled field that has a written value or a visible
+checkbox mark, even when that label is not in the list above. Derive a
+snake_case key from the printed label ("Cell phone" -> cell_phone, "Parent
+name" -> parent_name) and use the same output shape as every other field.
+Treat each distinct printed label as its own field: if the card shows both
+"Home phone" and "Cell phone", output BOTH (home phone from the home phone
+line, cell phone from the cell phone line). Do NOT merge a value written on one
+labeled line into a different field.
+
+Omitting a value the student actually wrote - a phone number, email, name, or
+any filled field - is a serious error. When a labeled field clearly has a
+value, ALWAYS include it.
+
+Limits: only treat printed FORM LABELS that have a fill-in area as fields.
+Ignore instructional sentences, marketing copy, and the school's address/phone
+in the card's footer. Do NOT invent fields and do NOT add a labeled field that
+is blank.
 
 STEP 5 - REPORT.
 Begin your JSON object with a "_meta" key carrying the orientation, then one
