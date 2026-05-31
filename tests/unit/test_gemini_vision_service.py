@@ -203,6 +203,61 @@ def test_save_orientation_zero_is_noop(tmp_path):
         mock_sb.assert_not_called()
 
 
+def test_verify_orientation_parses_value(stub_genai):
+    client = _make_client('{"rotation_needed": 180}')
+    with patch.object(svc, "get_gemini_client", return_value=client):
+        assert svc.verify_orientation(b"imgbytes") == 180
+
+
+def test_verify_orientation_rejects_out_of_range(stub_genai):
+    client = _make_client('{"rotation_needed": 45}')
+    with patch.object(svc, "get_gemini_client", return_value=client):
+        assert svc.verify_orientation(b"imgbytes") == 0
+
+
+def test_apply_orientation_zero_first_pass_is_noop():
+    with patch.object(svc, "verify_orientation") as vmock, \
+         patch.object(svc, "save_orientation_corrected_image") as smock:
+        info = svc.apply_orientation_correction("/tmp/x.jpg", 0, "cards-uploads/x.jpg")
+    assert info["applied_degrees"] == 0
+    vmock.assert_not_called()
+    smock.assert_not_called()
+
+
+def test_apply_orientation_verification_corrects_180_flip(tmp_path):
+    from PIL import Image
+
+    p = tmp_path / "card.jpg"
+    Image.new("RGB", (100, 40), "white").save(str(p), "JPEG")
+
+    # First pass said 90; verification finds it's still 180 off -> total 270.
+    with patch.object(svc, "verify_orientation", return_value=180) as vmock, \
+         patch.object(svc, "save_orientation_corrected_image", return_value=True) as smock:
+        info = svc.apply_orientation_correction(str(p), 90, "cards-uploads/u/card.jpg")
+
+    assert info["first_pass_degrees"] == 90
+    assert info["verification_additional"] == 180
+    assert info["applied_degrees"] == 270
+    assert info["uploaded"] is True
+    vmock.assert_called_once()
+    smock.assert_called_once_with(str(p), 270, "cards-uploads/u/card.jpg")
+
+
+def test_apply_orientation_verification_confirms_first_pass(tmp_path):
+    from PIL import Image
+
+    p = tmp_path / "card.jpg"
+    Image.new("RGB", (100, 40), "white").save(str(p), "JPEG")
+
+    # First pass 270 and verification agrees (0 additional) -> apply 270.
+    with patch.object(svc, "verify_orientation", return_value=0), \
+         patch.object(svc, "save_orientation_corrected_image", return_value=True) as smock:
+        info = svc.apply_orientation_correction(str(p), 270, "cards-uploads/u/card.jpg")
+
+    assert info["applied_degrees"] == 270
+    smock.assert_called_once_with(str(p), 270, "cards-uploads/u/card.jpg")
+
+
 def test_save_orientation_rotates_and_uploads(tmp_path):
     from PIL import Image
 

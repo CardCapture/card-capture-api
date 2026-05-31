@@ -34,12 +34,33 @@ Valid majors (for the mapped_major field):
 {valid_majors_json}
 
 ----------------------------------------------------------------
-STEP 0 - ORIENTATION.
-Before reading any field, determine the card's orientation. Decide how many
-degrees the image must be rotated CLOCKWISE so the card's text reads upright,
-left-to-right. The only valid answers are 0, 90, 180, or 270. If the card is
-already upright, this is 0. Report this once in the _meta block described in
-STEP 5. Read the fields as if the card were already upright.
+STEP 0 - ORIENTATION (do this first and get it exactly right).
+Decide how many degrees the image must be rotated CLOCKWISE so the card reads
+normally: upright, text running left-to-right, with the printed header/logo at
+the top. The only valid answers are 0, 90, 180, or 270.
+
+Reason it out explicitly before committing to a value:
+- Pick a reliable anchor that is PRINTED on the card (not handwritten): the
+  school name or logo, the card's printed title, or the printed field labels
+  (for example "Legal name", "Address", "Email", "High school"). These are
+  always designed to sit at the top and read left-to-right.
+- If that printed text already reads normally left-to-right, the answer is 0.
+- If the printed text runs bottom-to-top up the LEFT edge (rotated counter-
+  clockwise), it needs 90 clockwise.
+- If it runs top-to-bottom down the RIGHT edge (rotated clockwise), it needs
+  270 clockwise.
+- If the printed text is upside down (anchor at the bottom, letters inverted),
+  it needs 180.
+
+Guard against the two common mistakes:
+- Do NOT confuse upright with upside down. Upright text reads left-to-right and
+  the letters are not inverted; if you would have to read the labels upside
+  down, the answer is 180, not 0.
+- When choosing between 90 and 270, pick the one that makes the PRINTED labels
+  read left-to-right. Getting this backwards leaves the card upside down.
+
+Report the value once in the _meta block described in STEP 5. Read all fields
+as if the card were already upright.
 
 ----------------------------------------------------------------
 WORKFLOW - do this for every field:

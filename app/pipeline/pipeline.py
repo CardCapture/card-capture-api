@@ -318,7 +318,7 @@ class CardProcessingPipeline:
         from app.utils.image_processing import ensure_proper_orientation
         from app.services.gemini_vision_service import (
             process_card_with_gemini_vision,
-            save_orientation_corrected_image,
+            apply_orientation_correction,
         )
 
         card_fields = school_row.get("card_fields") or []
@@ -341,14 +341,15 @@ class CardProcessingPipeline:
         discovered_keys = vision_result.get("discovered_keys", [])
 
         # Layer 2: content-based orientation correction (replaces DocAI OCR
-        # rotation). Re-save an upright image so the review modal displays it
-        # correctly. The review modal also has a manual rotate control as a
-        # final fallback.
-        orientation_corrected = False
-        if rotation_degrees:
-            orientation_corrected = save_orientation_corrected_image(
-                working_path, rotation_degrees, context.original_storage_path
-            )
+        # rotation). First-pass rotation from extraction is verified with a
+        # cheap second pass (catches the 180 flip), then the upright image is
+        # re-saved so the review modal displays it correctly. The modal also has
+        # a manual rotate control as a final fallback.
+        orientation_info = apply_orientation_correction(
+            working_path, rotation_degrees, context.original_storage_path
+        )
+        orientation_corrected = orientation_info.get("uploaded", False)
+        applied_rotation = orientation_info.get("applied_degrees", rotation_degrees)
 
         # Convert to FieldData objects (same mapping as the DocAI path so
         # downstream behavior is identical).
@@ -373,7 +374,8 @@ class CardProcessingPipeline:
 
         log_debug("Vision-only extraction complete", {
             "total_fields": len(fields),
-            "image_rotation_degrees": rotation_degrees,
+            "first_pass_rotation": rotation_degrees,
+            "applied_rotation": applied_rotation,
             "orientation_corrected": orientation_corrected,
             "discovered_keys": discovered_keys,
         }, service="pipeline")
@@ -385,6 +387,8 @@ class CardProcessingPipeline:
                 "extraction_mode": "vision_only",
                 "gemini_field_count": len(gemini_fields),
                 "image_rotation_degrees": rotation_degrees,
+                "applied_rotation_degrees": applied_rotation,
+                "orientation": orientation_info,
                 "orientation_corrected": orientation_corrected,
                 "discovered_field_keys": discovered_keys,
             },

@@ -62,6 +62,120 @@ async def update_school_card_fields(school_id: str, payload: Dict[str, Any] = Bo
         log_debug(f"Error updating card fields for school {school_id}: {e}", service="schools")
         return JSONResponse(status_code=500, content={"error": "Failed to update card fields."})
 
+@router.post("/schools/{school_id}/suggested-fields/accept")
+async def accept_suggested_field(school_id: str, payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
+    """
+    Accept a discovered field suggestion: promote it from suggested_card_fields
+    into card_fields (so it shows for the current card and all future cards) and
+    remove it from the suggestions list.
+    Expects payload: { "key": "<field key>" }.
+    """
+    try:
+        user_school_id = user.get("school_id") if user else None
+        if not user_school_id or school_id != user_school_id:
+            return JSONResponse(status_code=403, content={"error": "Access denied. You can only update your own school."})
+
+        key = (payload.get("key") or "").strip()
+        if not key:
+            return JSONResponse(status_code=400, content={"error": "key is required in payload."})
+
+        supabase_client = get_supabase_client()
+        school_query = supabase_client.table("schools").select(
+            "card_fields, suggested_card_fields"
+        ).eq("id", school_id).maybe_single().execute()
+        if not school_query or not school_query.data:
+            return JSONResponse(status_code=404, content={"error": "School not found."})
+
+        card_fields = school_query.data.get("card_fields") or []
+        if not isinstance(card_fields, list):
+            card_fields = []
+        suggestions = school_query.data.get("suggested_card_fields") or []
+        if not isinstance(suggestions, list):
+            suggestions = []
+
+        suggestion = next((s for s in suggestions if isinstance(s, dict) and s.get("key") == key), None)
+
+        # Promote into card_fields if not already present (idempotent).
+        if not any(isinstance(f, dict) and f.get("key") == key for f in card_fields):
+            from app.utils.field_utils import generate_field_label
+            label = (suggestion or {}).get("label") or generate_field_label(key)
+            field_type = (suggestion or {}).get("field_type") or "text"
+            new_field = {"key": key, "label": label, "enabled": True, "required": False, "field_type": field_type}
+            options = (suggestion or {}).get("options")
+            if options:
+                new_field["options"] = options
+            card_fields.append(new_field)
+
+        # Remove from suggestions.
+        suggestions = [s for s in suggestions if not (isinstance(s, dict) and s.get("key") == key)]
+
+        response = supabase_client.table("schools").update(
+            {"card_fields": card_fields, "suggested_card_fields": suggestions}
+        ).eq("id", school_id).execute()
+
+        if response.data:
+            log_debug(f"Accepted suggested field '{key}' for school {school_id}", service="schools")
+            return JSONResponse(status_code=200, content={
+                "message": "Suggested field accepted",
+                "school_id": school_id,
+                "key": key,
+                "card_fields": card_fields,
+                "suggested_card_fields": suggestions,
+            })
+        return JSONResponse(status_code=500, content={"error": "Failed to accept suggested field."})
+
+    except Exception as e:
+        log_debug(f"Error accepting suggested field for school {school_id}: {e}", service="schools")
+        return JSONResponse(status_code=500, content={"error": "Failed to accept suggested field."})
+
+
+@router.post("/schools/{school_id}/suggested-fields/dismiss")
+async def dismiss_suggested_field(school_id: str, payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
+    """
+    Dismiss a discovered field suggestion: remove it from suggested_card_fields
+    without adding it to card_fields.
+    Expects payload: { "key": "<field key>" }.
+    """
+    try:
+        user_school_id = user.get("school_id") if user else None
+        if not user_school_id or school_id != user_school_id:
+            return JSONResponse(status_code=403, content={"error": "Access denied. You can only update your own school."})
+
+        key = (payload.get("key") or "").strip()
+        if not key:
+            return JSONResponse(status_code=400, content={"error": "key is required in payload."})
+
+        supabase_client = get_supabase_client()
+        school_query = supabase_client.table("schools").select(
+            "suggested_card_fields"
+        ).eq("id", school_id).maybe_single().execute()
+        if not school_query or not school_query.data:
+            return JSONResponse(status_code=404, content={"error": "School not found."})
+
+        suggestions = school_query.data.get("suggested_card_fields") or []
+        if not isinstance(suggestions, list):
+            suggestions = []
+        suggestions = [s for s in suggestions if not (isinstance(s, dict) and s.get("key") == key)]
+
+        response = supabase_client.table("schools").update(
+            {"suggested_card_fields": suggestions}
+        ).eq("id", school_id).execute()
+
+        if response.data:
+            log_debug(f"Dismissed suggested field '{key}' for school {school_id}", service="schools")
+            return JSONResponse(status_code=200, content={
+                "message": "Suggested field dismissed",
+                "school_id": school_id,
+                "key": key,
+                "suggested_card_fields": suggestions,
+            })
+        return JSONResponse(status_code=500, content={"error": "Failed to dismiss suggested field."})
+
+    except Exception as e:
+        log_debug(f"Error dismissing suggested field for school {school_id}: {e}", service="schools")
+        return JSONResponse(status_code=500, content={"error": "Failed to dismiss suggested field."})
+
+
 @router.get("/schools/{school_id}/notification-settings")
 async def get_notification_settings(school_id: str, user=Depends(get_current_user)):
     """

@@ -203,6 +203,97 @@ def process_card_with_gemini_vision(
     }
 
 
+def _load_rotated_jpeg(local_image_path: str, degrees: int, max_dim: int = None) -> bytes:
+    """Open an image, rotate it CLOCKWISE by `degrees`, optionally downscale, return JPEG bytes."""
+    from PIL import Image
+
+    with Image.open(local_image_path) as img:
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGB")
+        rotated = img.rotate(-degrees, expand=True) if degrees % 360 else img.copy()
+        if max_dim:
+            rotated.thumbnail((max_dim, max_dim))
+        buf = io.BytesIO()
+        rotated.save(buf, format="JPEG", quality=85, optimize=True)
+        return buf.getvalue()
+
+
+def verify_orientation(image_bytes: bytes, model: str = None) -> int:
+    """
+    Second-pass orientation check. Given an image that has already had the
+    first-pass rotation applied, return the ADDITIONAL clockwise degrees
+    (0/90/180/270) still needed to make it upright. This is a small, cheap call
+    that mainly exists to catch the occasional 180 flip from the first pass.
+
+    Returns 0 on any failure (keep the first-pass result).
+    """
+    from app.config import GEMINI_VISION_MODEL
+    from google.genai import types as genai_types
+
+    model = model or GEMINI_VISION_MODEL
+    client = get_gemini_client()
+    prompt = (
+        "This is a scanned student inquiry card. Reply with ONLY a JSON object "
+        '{"rotation_needed": N} where N is the additional CLOCKWISE degrees '
+        "(0, 90, 180, or 270) required to make the card read normally upright with "
+        "its printed text left-to-right. 0 means it already reads normally; 180 means "
+        "it is upside down. Use the printed labels and logo as your guide. No other text."
+    )
+    try:
+        response = retry_with_exponential_backoff(
+            func=lambda: client.models.generate_content(
+                model=model,
+                contents=[prompt, genai_types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")],
+                config=genai_types.GenerateContentConfig(thinking_config={"thinking_budget": 0}),
+            ),
+            max_retries=2,
+            operation_name="Gemini orientation verification",
+            service="gemini_vision",
+        )
+        val = int((json.loads(_strip_fences(response.text or "")) or {}).get("rotation_needed", 0) or 0) % 360
+        return val if val in _VALID_ROTATIONS else 0
+    except Exception as e:
+        log_debug(f"Orientation verification failed, keeping first pass: {e}", service="gemini_vision")
+        import sentry_sdk
+        sentry_sdk.capture_exception(e)
+        return 0
+
+
+def apply_orientation_correction(local_image_path: str, first_pass_degrees: int, original_storage_path: str) -> dict:
+    """
+    Orchestrate orientation correction: take the first-pass rotation from the
+    main extraction, verify it with a cheap second pass (which catches the 180
+    flip), then save the upright image to storage.
+
+    The verification only runs when the first pass is non-zero, so upright cards
+    pay no extra cost.
+    """
+    info = {
+        "first_pass_degrees": first_pass_degrees,
+        "verification_additional": 0,
+        "applied_degrees": first_pass_degrees if first_pass_degrees else 0,
+        "uploaded": False,
+    }
+    if not first_pass_degrees or first_pass_degrees % 360 == 0:
+        info["applied_degrees"] = 0
+        return info
+
+    try:
+        rotated_preview = _load_rotated_jpeg(local_image_path, first_pass_degrees, max_dim=1024)
+        additional = verify_orientation(rotated_preview)
+    except Exception as e:
+        log_debug(f"Orientation verify step errored, using first pass only: {e}", service="gemini_vision")
+        additional = 0
+
+    total = (first_pass_degrees + additional) % 360
+    info["verification_additional"] = additional
+    info["applied_degrees"] = total
+    if total:
+        info["uploaded"] = save_orientation_corrected_image(local_image_path, total, original_storage_path)
+    log_debug("Orientation correction applied", info, service="gemini_vision")
+    return info
+
+
 def save_orientation_corrected_image(local_image_path: str, rotation_degrees: int, original_storage_path: str) -> bool:
     """
     Rotate the image to upright and overwrite the stored file so the review
