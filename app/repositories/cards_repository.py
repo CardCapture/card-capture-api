@@ -31,6 +31,11 @@ def get_cards_db(
         query_v1 = query_v1.eq("event_id", event_id)
     if school_id:
         query_v1 = query_v1.eq("school_id", school_id)
+    # Stable ordering is required for correct pagination. Without an explicit
+    # ORDER BY, Postgres returns rows in physical (insertion) order, so a single
+    # page can miss whole status groups (e.g. an event's needs_review cards all
+    # landing outside the first page). Order newest-first, id as a tiebreaker.
+    query_v1 = query_v1.order("created_at", desc=True).order("id", desc=True)
     query_v1 = query_v1.range(offset, offset + limit - 1)
     response_v1 = query_v1.execute()
 
@@ -52,6 +57,8 @@ def get_cards_db(
         query_v2 = query_v2.eq("event_id", event_id)
     if school_id:
         query_v2 = query_v2.eq("school_id", school_id)
+    # Stable ordering for correct pagination (see V1 note above).
+    query_v2 = query_v2.order("created_at", desc=True).order("id", desc=True)
     query_v2 = query_v2.range(offset, offset + limit - 1)
     response_v2 = query_v2.execute()
 

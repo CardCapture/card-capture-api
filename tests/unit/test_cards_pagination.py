@@ -99,6 +99,7 @@ def _setup_table_responses(client, reviewed_data=None, interactions=None, jobs=N
         mock.eq.return_value = mock
         mock.neq.return_value = mock
         mock.in_.return_value = mock
+        mock.order.return_value = mock
         mock.range.return_value = mock
         mock.execute.return_value = Mock(data=data, count=len(data), error=None)
         return mock
