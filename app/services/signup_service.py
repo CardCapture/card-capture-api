@@ -163,18 +163,27 @@ def build_first_pass_prompt() -> str:
 
 YOUR TASK: Extract data row-by-row, prioritizing STRUCTURAL ACCURACY over OCR perfection.
 
-🎯 PRIMARY GOAL: Ensure each student's data stays within their own row.
+🎯 PRIMARY GOAL: Ensure each student's data stays within their own row, and each value stays in its own column, even when some cells are blank.
+
+⛔ THE #1 MISTAKE TO AVOID - COLUMN SHIFTING ON BLANK CELLS:
+A row is defined by its VERTICAL POSITION in the table (the physical line the handwriting sits on). Every cell you read belongs to the row it is physically written on.
+- A blank cell is a REAL, INTENTIONAL part of the table. It means that student left that field empty.
+- When a cell is blank, you MUST output an empty string "" for it and KEEP GOING to the next column of the SAME row.
+- NEVER pull a value up from the row below (or down from the row above) to fill a blank cell.
+- NEVER let a blank cell cause the values beneath it to shift up. If column "email" is blank on row 2, row 3's email STAYS on row 3 - it does NOT move up into row 2.
+- Do NOT "close the gap." Preserve every blank exactly where it appears. The number of rows must equal the number of physical writing lines that have ANY data, blank cells included.
 
 STEP-BY-STEP PROCESS:
 
 1. IDENTIFY TABLE STRUCTURE:
    - Locate the header row (column names)
-   - Count the number of body rows with ANY data written in them
-   - Note the visual row boundaries (horizontal lines or white space between rows)
+   - Count the number of body rows that have ANY data written in them (a row counts even if only one cell is filled)
+   - Row boundaries are the horizontal ruled lines / the physical line each entry sits on. White space INSIDE a row (a blank cell) is NOT a row boundary and does NOT start a new row.
 
-2. FOR EACH ROW (going top to bottom):
+2. FOR EACH ROW (going top to bottom, one physical line at a time):
    - Assign it a row_number (1, 2, 3, etc.)
-   - Extract ALL data that appears within that row's horizontal boundaries
+   - Scan LEFT TO RIGHT across ALL columns of THAT single row before moving to the next row.
+   - For each column, read the cell that is horizontally aligned with this row. If that cell is empty, output "" for it and move to the next column. Do not skip the column and do not borrow another row's value.
    - If text is on the border between rows, assign it to the row where MOST of the text appears
    - Extract exactly what you see - don't worry about OCR errors yet
 
@@ -187,10 +196,11 @@ STEP-BY-STEP PROCESS:
    - Column 6: high_school
    - Column 7: major
    - Column 8: graduation_year (often labeled "GRAD YEAR")
+   Each value must land in the column it is physically written under. If a student skipped column 4 (email), column 4 is "" and columns 5+ keep their own values. Do not slide later columns left to fill the gap.
 
 4. HANDLING MESSY DATA:
    - If multiple fields appear in one cell, extract them all into that field (we'll split later)
-   - If a field is completely blank, use empty string ""
+   - If a field is completely blank, use empty string "" and continue - do NOT fill it from another row or another column
    - If you can't read handwriting clearly, transcribe your best guess
    - Include the "confidence" field: "high" (clearly readable), "medium" (somewhat unclear), "low" (very messy)
 
@@ -215,9 +225,12 @@ OUTPUT FORMAT - JSON array with one object per row:
 
 CRITICAL RULES:
 - NEVER merge data from multiple rows into one student
+- NEVER shift values up to fill a blank cell - a blank cell stays "" and the rows below it stay put
+- Blank cells are expected and must be preserved exactly where they occur
 - ALWAYS include row_number
+- The number of output objects MUST equal the number of physical rows that contain ANY writing (do not drop rows that are mostly blank)
 - Extract what you see, don't over-correct OCR errors yet
-- If in doubt about which row text belongs to, use visual horizontal alignment
+- If in doubt about which row text belongs to, use visual horizontal alignment (the physical line the text sits on)
 - Return ONLY the JSON array, no markdown, no explanations
 """
 
@@ -475,7 +488,9 @@ async def extract_signup_data_first_pass(image_path: str) -> List[Dict]:
                 prompt,
                 genai_types.Part.from_bytes(data=image_data, mime_type="image/jpeg")
             ],
-            config=genai_types.GenerateContentConfig(thinking_config=genai_types.ThinkingConfig(thinking_budget=0))
+            # Allow a modest thinking budget: aligning rows/columns around blank
+            # cells is spatial reasoning that benefits from some deliberation.
+            config=genai_types.GenerateContentConfig(thinking_config=genai_types.ThinkingConfig(thinking_budget=512))
         )
 
         log_debug("Received first-pass response from Gemini", {
@@ -504,6 +519,17 @@ async def extract_signup_data_first_pass(image_path: str) -> List[Dict]:
 
         if not isinstance(records, list):
             raise ValueError("Expected JSON array from Gemini")
+
+        # Sanity-check row integrity so a recurrence of the "blank cell shifts
+        # rows up" bug is visible in logs. Non-sequential or duplicate
+        # row_numbers are a signal that Gemini collapsed a blank cell.
+        row_numbers = [r.get("row_number") for r in records if isinstance(r, dict)]
+        expected_sequence = list(range(1, len(records) + 1))
+        if row_numbers != expected_sequence:
+            log_debug("⚠️ First-pass row_numbers are not sequential - possible row shift", {
+                "row_numbers": row_numbers,
+                "expected": expected_sequence
+            }, service="signup")
 
         log_debug(f"=== FIRST PASS COMPLETE ===", {
             "records_count": len(records)
