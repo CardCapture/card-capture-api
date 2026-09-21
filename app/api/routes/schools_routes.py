@@ -62,6 +62,54 @@ async def update_school_card_fields(school_id: str, payload: Dict[str, Any] = Bo
         log_debug(f"Error updating card fields for school {school_id}: {e}", service="schools")
         return JSONResponse(status_code=500, content={"error": "Failed to update card fields."})
 
+@router.put("/schools/{school_id}/majors")
+async def update_school_majors(school_id: str, payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
+    """
+    Updates the majors list in the schools table for a given school.
+
+    RLS on `schools` only permits UPDATE for users without a school_id, so a
+    school admin writing to Supabase directly is rejected without an error and
+    the save silently does nothing. This runs with the service role instead and
+    enforces tenant isolation here.
+    """
+    try:
+        # TENANT ISOLATION: Ensure user can only update their own school
+        user_school_id = user.get("school_id") if user else None
+        if not user_school_id or school_id != user_school_id:
+            return JSONResponse(status_code=403, content={"error": "Access denied. You can only update your own school."})
+
+        majors = payload.get("majors")
+        if not isinstance(majors, list):
+            return JSONResponse(status_code=400, content={"error": "majors must be a list."})
+
+        # An empty list is a legitimate value (a school clearing its majors), so
+        # only the type is rejected above.
+        cleaned = [str(major).strip() for major in majors if str(major).strip()]
+
+        supabase_client = get_supabase_client()
+        school_query = supabase_client.table("schools").select("id").eq("id", school_id).maybe_single().execute()
+        if not school_query or not school_query.data:
+            return JSONResponse(status_code=404, content={"error": "School not found."})
+
+        log_debug(f"[Majors Update] Updating school {school_id} with {len(cleaned)} majors", service="schools")
+
+        response = supabase_client.table("schools").update({"majors": cleaned}).eq("id", school_id).execute()
+
+        if response.data:
+            log_debug(f"Successfully updated majors for school {school_id}", service="schools")
+            return JSONResponse(status_code=200, content={
+                "message": "Majors updated successfully",
+                "school_id": school_id,
+                "majors": cleaned
+            })
+
+        log_debug(f"Failed to update majors for school {school_id}", service="schools")
+        return JSONResponse(status_code=500, content={"error": "Failed to update majors."})
+
+    except Exception as e:
+        log_debug(f"Error updating majors for school {school_id}: {e}", service="schools")
+        return JSONResponse(status_code=500, content={"error": "Failed to update majors."})
+
 @router.post("/schools/{school_id}/suggested-fields/accept")
 async def accept_suggested_field(school_id: str, payload: Dict[str, Any] = Body(...), user=Depends(get_current_user)):
     """
