@@ -51,6 +51,58 @@ def get_combined_fields_to_exclude():
         'academic_scores',  # Combined field that gets split into gpa, act_score, sat_score
     ]
 
+# Combined name fields that were later split into first/last. Cards scanned
+# before the split only carry the combined value, so exports fill the split
+# columns from it rather than writing blanks. Stored card data is left alone;
+# this is a read-time fallback only.
+SPLIT_NAME_FALLBACKS = {
+    "parent_guardian_first_name": ("parent_guardian_name", "first_name"),
+    "parent_guardian_last_name": ("parent_guardian_name", "last_name"),
+}
+
+
+def split_full_name(full_name) -> dict:
+    """
+    Split a full name into first and last name.
+
+    A single word is treated as a first name, and everything after the first
+    word becomes the last name so multi-word surnames stay intact.
+    """
+    if not full_name or not isinstance(full_name, str):
+        return {"first_name": "", "last_name": ""}
+
+    name_parts = [part for part in full_name.strip().split() if part]
+
+    if not name_parts:
+        return {"first_name": "", "last_name": ""}
+    if len(name_parts) == 1:
+        return {"first_name": name_parts[0], "last_name": ""}
+    return {"first_name": name_parts[0], "last_name": " ".join(name_parts[1:])}
+
+
+def read_field_value(fields: dict, key: str) -> str:
+    """Read a card field's value, tolerating both dict and bare value formats"""
+    if not isinstance(fields, dict):
+        return ""
+    data = fields.get(key)
+    if isinstance(data, dict):
+        return str(data.get("value", "") or "")
+    return str(data) if data else ""
+
+
+def resolve_split_name_value(fields: dict, field_key: str) -> str:
+    """
+    Value for a split name column: prefer the split field, then fall back to
+    splitting the combined field that older cards still carry.
+    """
+    direct = read_field_value(fields, field_key)
+    if direct:
+        return direct
+
+    source_key, part = SPLIT_NAME_FALLBACKS[field_key]
+    return split_full_name(read_field_value(fields, source_key)).get(part, "")
+
+
 def generate_field_label(field_key: str) -> str:
     """Convert field keys to user-friendly display labels for DocAI field names"""
     

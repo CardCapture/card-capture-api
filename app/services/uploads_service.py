@@ -21,6 +21,11 @@ from google.cloud import documentai_v1 as documentai
 from app.config import PROJECT_ID, DOCAI_LOCATION, DOCAI_PROCESSOR_ID, TRIMMED_FOLDER
 import json
 from app.utils.retry_utils import retry_with_exponential_backoff, log_debug
+from app.utils.field_utils import (
+    SPLIT_NAME_FALLBACKS,
+    resolve_split_name_value,
+    split_full_name,
+)
 from datetime import datetime, timezone
 from typing import Dict, Any
 from pathlib import Path
@@ -607,30 +612,8 @@ async def export_to_slate_service(payload: dict):
         log_debug(f"SLATE EXPORT: Using CSV headers: {headers}", service="uploads")
         log_debug(f"SLATE EXPORT: Field keys mapping: {field_keys}", service="uploads")
         
-        def split_name(full_name):
-            """Split a full name into first name and last name"""
-            if not full_name or not isinstance(full_name, str):
-                return {"first_name": "", "last_name": ""}
-            
-            trimmed_name = full_name.strip()
-            if not trimmed_name:
-                return {"first_name": "", "last_name": ""}
-            
-            # Split by spaces and filter out empty strings
-            name_parts = [part for part in trimmed_name.split() if part]
-            
-            if len(name_parts) == 0:
-                return {"first_name": "", "last_name": ""}
-            elif len(name_parts) == 1:
-                # Only one name part - treat as first name
-                return {"first_name": name_parts[0], "last_name": ""}
-            elif len(name_parts) == 2:
-                # Two parts - first and last
-                return {"first_name": name_parts[0], "last_name": name_parts[1]}
-            else:
-                # Three or more parts - first name is first part, last name is everything else
-                return {"first_name": name_parts[0], "last_name": " ".join(name_parts[1:])}
-        
+        split_name = split_full_name
+
         def quote_field(value):
             """Strip commas to prevent Slate import issues"""
             if not value:
@@ -707,6 +690,10 @@ async def export_to_slate_service(payload: dict):
 
                                 name_parts = split_name(full_name)
                                 field_value = name_parts.get("last_name", "")
+                elif field_key in SPLIT_NAME_FALLBACKS:
+                    # Older cards only carry the combined name, so fill the
+                    # split columns from it instead of exporting blanks.
+                    field_value = resolve_split_name_value(row.get("fields", {}), field_key)
                 else:
                     # These are card fields - extract from nested fields object
                     fields_data = row.get("fields", {})
