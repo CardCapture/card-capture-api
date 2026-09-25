@@ -280,15 +280,14 @@ class CardProcessingPipeline:
         """
         Read extraction-related school settings.
 
-        Resilient to the vision-only columns (use_vision_only_extraction,
-        suggested_card_fields) not existing yet, so the DocAI path is completely
+        Resilient to the use_vision_only_extraction column not existing yet, so the DocAI path is completely
         unaffected before the migration runs. Returns (row, vision_columns_available).
         """
         supabase = get_supabase_client()
         try:
             res = (
                 supabase.table("schools")
-                .select("docai_processor_id, card_fields, use_vision_only_extraction, suggested_card_fields")
+                .select("docai_processor_id, card_fields, use_vision_only_extraction")
                 .eq("id", school_id)
                 .maybe_single()
                 .execute()
@@ -338,7 +337,6 @@ class CardProcessingPipeline:
         )
         gemini_fields = vision_result.get("fields", {})
         rotation_degrees = vision_result.get("image_rotation_degrees", 0)
-        discovered_keys = vision_result.get("discovered_keys", [])
 
         # Layer 2: content-based orientation correction (replaces DocAI OCR
         # rotation). First-pass rotation from extraction is verified with a
@@ -365,19 +363,11 @@ class CardProcessingPipeline:
                     original_value=data.get("original_value"),
                 )
 
-        # Capture discovered (unconfigured) fields as onboarding suggestions.
-        if discovered_keys:
-            try:
-                self._record_field_suggestions(context.school_id, school_row, discovered_keys, gemini_fields)
-            except Exception as e:
-                log_debug(f"Failed to record field suggestions: {e}", service="pipeline")
-
         log_debug("Vision-only extraction complete", {
             "total_fields": len(fields),
             "first_pass_rotation": rotation_degrees,
             "applied_rotation": applied_rotation,
             "orientation_corrected": orientation_corrected,
-            "discovered_keys": discovered_keys,
         }, service="pipeline")
 
         return ProcessingResult(
@@ -390,52 +380,8 @@ class CardProcessingPipeline:
                 "applied_rotation_degrees": applied_rotation,
                 "orientation": orientation_info,
                 "orientation_corrected": orientation_corrected,
-                "discovered_field_keys": discovered_keys,
             },
         )
-
-    def _record_field_suggestions(
-        self,
-        school_id: str,
-        school_row: Dict[str, Any],
-        discovered_keys: list,
-        gemini_fields: Dict[str, Any],
-    ) -> None:
-        """
-        Persist discovered (unconfigured) fields to schools.suggested_card_fields
-        so they can be reviewed and accepted into card_fields later. Never adds a
-        field already configured or already suggested.
-        """
-        from app.utils.field_utils import generate_field_label
-
-        supabase = get_supabase_client()
-        existing = school_row.get("suggested_card_fields") or []
-        if not isinstance(existing, list):
-            existing = []
-        existing_keys = {s.get("key") for s in existing if isinstance(s, dict)}
-        configured_keys = {
-            f.get("key") for f in (school_row.get("card_fields") or []) if isinstance(f, dict)
-        }
-
-        added = False
-        for key in discovered_keys:
-            if not key or key in existing_keys or key in configured_keys:
-                continue
-            fd = gemini_fields.get(key, {}) or {}
-            existing.append({
-                "key": key,
-                "label": generate_field_label(key),
-                "field_type": fd.get("field_type", "text"),
-                "sample_value": fd.get("value", ""),
-            })
-            existing_keys.add(key)
-            added = True
-
-        if added:
-            supabase.table("schools").update(
-                {"suggested_card_fields": existing}
-            ).eq("id", school_id).execute()
-            log_debug("Recorded new field suggestions", {"keys": sorted(existing_keys)}, service="pipeline")
 
     def _create_result_from_existing_student(
         self,

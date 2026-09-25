@@ -12,10 +12,9 @@ single call so they cost no extra latency:
 - ORIENTATION: the model reports how many degrees the image must rotate to be
   upright (_meta.image_rotation_degrees). This replaces the rotation correction
   that the DocAI Enterprise OCR processor used to provide.
-- DISCOVERY: the model is allowed to return clearly-labeled fields it sees on
-  the card that are not in the configured field list. Downstream code captures
-  these as suggestions so a custom card format can be onboarded without
-  pre-configuring every field.
+- FIXED FIELDS: the model may only return the school's configured field keys.
+  A field's optional card_label (the text printed on the card) is passed as a
+  hint so custom fields can be located without the model inventing keys.
 """
 import json
 from typing import List
@@ -165,28 +164,12 @@ The pipe character "|" in major names is part of the name, not a separator.
 If no reasonable match, output "Undecided".
 Field type: "select", detected_options should list the full valid_majors list.
 
-ADDITIONAL FIELDS (discovery) - CRITICAL: never drop information a student wrote.
-The card may have clearly-labeled fields that are NOT in the list above. Common
-example: a "Cell phone" line that is separate from "Home phone", or an intended
-sport, campus visit date, counselor name, parent name.
-
-You MUST output EVERY labeled field that has a written value or a visible
-checkbox mark, even when that label is not in the list above. Derive a
-snake_case key from the printed label ("Cell phone" -> cell_phone, "Parent
-name" -> parent_name) and use the same output shape as every other field.
-Treat each distinct printed label as its own field: if the card shows both
-"Home phone" and "Cell phone", output BOTH (home phone from the home phone
-line, cell phone from the cell phone line). Do NOT merge a value written on one
-labeled line into a different field.
-
-Omitting a value the student actually wrote - a phone number, email, name, or
-any filled field - is a serious error. When a labeled field clearly has a
-value, ALWAYS include it.
-
-Limits: only treat printed FORM LABELS that have a fill-in area as fields.
-Ignore instructional sentences, marketing copy, and the school's address/phone
-in the card's footer. Do NOT invent fields and do NOT add a labeled field that
-is blank.
+FIELD LIST IS FIXED: output ONLY the field keys listed above, using those exact
+keys. Never create a new key, even for a labeled line on the card that is not
+in the list. When a field shows the text printed on the card in quotes, read
+the value from the line with that printed label. Treat each printed label as
+its own field: do NOT merge a value written on one labeled line into a
+different field (e.g. a "Home phone" value never goes into cell).
 
 STEP 5 - REPORT.
 Begin your JSON object with a "_meta" key carrying the orientation, then one
@@ -239,12 +222,21 @@ def _build_field_list(card_fields: List[dict]) -> str:
     for f in card_fields or []:
         if not isinstance(f, dict) or not f.get("enabled", True):
             continue
+        # Review-only fields (not printed on the card) are filled in by a
+        # reviewer, never extracted, so the model can't guess a value.
+        if f.get("extract") is False:
+            continue
         key = f.get("key") or f.get("name") or f.get("field_name")
         if not key:
             continue
         req = " (required)" if f.get("required") else ""
         ftype = f.get("field_type") or "text"
-        lines.append(f"  - {key} [{ftype}]{req}")
+        options = f.get("options") or []
+        if ftype == "select" and options:
+            ftype = f"select: {', '.join(options)}"
+        card_label = (f.get("card_label") or "").strip()
+        printed = f' (printed on card as "{card_label}")' if card_label else ""
+        lines.append(f"  - {key} [{ftype}]{req}{printed}")
     if not any("mapped_major" in ln for ln in lines):
         lines.append("  - mapped_major [select]")
     return "\n".join(lines)

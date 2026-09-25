@@ -7,11 +7,9 @@ same field-dict shape that ``process_card_with_gemini_v2`` produces, so the
 existing ``parse_gemini_quality_response`` and the downstream FieldData
 conversion in ``pipeline._extract`` keep working unchanged.
 
-Two extras ride the same call:
-- ``image_rotation_degrees``: clockwise degrees needed to make the card upright,
-  used to re-save a correctly-oriented image (replaces DocAI rotation).
-- ``discovered_keys``: clearly-labeled fields Gemini saw that are not in the
-  school's configured card_fields. Captured as onboarding suggestions.
+One extra rides the same call: ``image_rotation_degrees``, the clockwise
+degrees needed to make the card upright, used to re-save a correctly-oriented
+image (replaces DocAI rotation).
 """
 import io
 import json
@@ -118,7 +116,6 @@ def process_card_with_gemini_vision(
         {
           "fields": {<field_name>: {<quality-enhanced field dict>}, ...},
           "image_rotation_degrees": int (0|90|180|270),
-          "discovered_keys": [<keys not present in configured card_fields>],
         }
     """
     from app.config import GEMINI_VISION_MODEL
@@ -185,21 +182,14 @@ def process_card_with_gemini_vision(
     placeholder_fields = _build_placeholder_fields(card_fields)
     enhanced_fields = parse_gemini_quality_response(json.dumps(parsed), placeholder_fields)
 
-    configured_keys = set(placeholder_fields.keys()) | {"mapped_major"}
-    discovered_keys = [k for k in enhanced_fields.keys() if k not in configured_keys]
-    if discovered_keys:
-        log_debug("Vision path discovered unconfigured fields", {"keys": discovered_keys}, service="gemini_vision")
-
     log_debug("=== GEMINI VISION EXTRACTION COMPLETE ===", {
         "field_count": len(enhanced_fields),
         "rotation_degrees": rotation_degrees,
-        "discovered_count": len(discovered_keys),
     }, service="gemini_vision")
 
     return {
         "fields": enhanced_fields,
         "image_rotation_degrees": rotation_degrees,
-        "discovered_keys": discovered_keys,
     }
 
 

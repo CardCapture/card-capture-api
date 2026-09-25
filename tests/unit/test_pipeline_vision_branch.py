@@ -52,7 +52,6 @@ def test_flag_on_uses_vision_skips_docai(monkeypatch):
     vision_return = {
         "fields": {"first_name": {"value": "Jane", "source": "gemini", "enabled": True, "required": True}},
         "image_rotation_degrees": 0,
-        "discovered_keys": [],
     }
 
     docai_mock = MagicMock()

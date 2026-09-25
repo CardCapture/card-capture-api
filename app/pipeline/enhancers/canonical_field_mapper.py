@@ -7,6 +7,52 @@ from app.pipeline.models import FieldData, PipelineContext
 from app.utils.retry_utils import log_debug
 
 
+# Legacy/alternate field names mapped to their canonical key
+FIELD_ALIASES = {
+    "mobile": "cell",
+    "phone": "cell", 
+    "phone_number": "cell",
+    "cellphone": "cell",
+    "address1": "address",
+    "street_address": "address",
+    "home_address": "address",
+    "mailing_address": "address",
+    "address2": "address_2",
+    "zip": "zip_code",
+    "zipcode": "zip_code",
+    "postal_code": "zip_code",
+    "dob": "date_of_birth",
+    "birthdate": "date_of_birth",
+    "birth_date": "date_of_birth",
+    "birthday": "date_of_birth",
+    "start_term": "entry_term",
+    "entry_semester": "entry_term",
+    "start_year": "entry_year",
+    "sms_opt_in": "permission_to_text",
+    "text_permission": "permission_to_text",
+    "highschool": "high_school",
+    "high_school_name": "high_school",
+    "school_name": "high_school",
+    "name_of_high_school": "high_school",
+    "name_of_high_school_college": "high_school",
+    "student_name": "name",
+    "full_name": "name",
+    "fullname": "name",
+    "email_address": "email",
+    "e_mail": "email",
+    "emailaddress": "email",
+    "program": "major",
+    "degree": "major",
+    "field_of_study": "major",
+    "major_program": "major",
+    "studenttype": "student_type",
+    "student_category": "student_type",
+    "entryterm": "entry_term",
+    "current_school": "high_school",
+    "grad_year": "graduation_year",
+}
+
+
 class CanonicalFieldMapperEnhancer(FieldEnhancer):
     """
     Maps legacy field names to canonical field names and ensures name splitting.
@@ -37,50 +83,7 @@ class CanonicalFieldMapperEnhancer(FieldEnhancer):
         Map legacy field names to canonical field names.
         Based on the mapping from students_service.py _normalize_student_payload
         """
-        # Canonical field mapping
-        field_mapping = {
-            "mobile": "cell",
-            "phone": "cell", 
-            "phone_number": "cell",
-            "cellphone": "cell",
-            "address1": "address",
-            "street_address": "address",
-            "home_address": "address",
-            "mailing_address": "address",
-            "address2": "address_2",
-            "zip": "zip_code",
-            "zipcode": "zip_code",
-            "postal_code": "zip_code",
-            "dob": "date_of_birth",
-            "birthdate": "date_of_birth",
-            "birth_date": "date_of_birth",
-            "birthday": "date_of_birth",
-            "start_term": "entry_term",
-            "entry_semester": "entry_term",
-            "start_year": "entry_year",
-            "sms_opt_in": "permission_to_text",
-            "text_permission": "permission_to_text",
-            "highschool": "high_school",
-            "high_school_name": "high_school",
-            "school_name": "high_school",
-            "name_of_high_school": "high_school",
-            "name_of_high_school_college": "high_school",
-            "student_name": "name",
-            "full_name": "name",
-            "fullname": "name",
-            "email_address": "email",
-            "e_mail": "email",
-            "emailaddress": "email",
-            "program": "major",
-            "degree": "major",
-            "field_of_study": "major",
-            "major_program": "major",
-            "studenttype": "student_type",
-            "student_category": "student_type",
-            "entryterm": "entry_term",
-            "current_school": "high_school",
-            "grad_year": "graduation_year",
-        }
+        field_mapping = FIELD_ALIASES
         
         mapped_fields = {}
         

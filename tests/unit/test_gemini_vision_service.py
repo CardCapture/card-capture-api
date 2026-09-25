@@ -4,8 +4,7 @@ Unit tests for the vision-only extraction service (DocAI removal path).
 Covers:
 - Pure helpers (fence stripping, envelope unwrap, placeholder build, mime, rotation).
 - process_card_with_gemini_vision with a mocked Gemini client: prompt + image
-  bytes are sent, orientation meta is parsed, discovered fields are reported,
-  and a wrapped {"fields": {...}} envelope is unwrapped.
+  bytes are sent, orientation meta is parsed, and a wrapped {"fields": {...}} envelope is unwrapped.
 - save_orientation_corrected_image rotation + upload behavior.
 """
 import json
@@ -36,7 +35,7 @@ def stub_genai(monkeypatch):
     monkeypatch.setitem(sys.modules, "google.genai", genai_mod)
     monkeypatch.setitem(sys.modules, "google.genai.types", types_mod)
     # Neutralize the retry wrapper to a direct passthrough. These tests verify
-    # parsing/orientation/discovery, not retry behavior, and other tests in the
+    # parsing/orientation, not retry behavior, and other tests in the
     # suite pollute the retry helper's reference. Passthrough keeps the mocked
     # client's response deterministic.
     monkeypatch.setattr(svc, "retry_with_exponential_backoff", lambda func, **kwargs: func())
@@ -136,7 +135,6 @@ def test_process_card_sends_prompt_and_image_and_parses(tmp_path, stub_genai):
         "_meta": {"image_rotation_degrees": 90},
         "first_name": _field("Jane"),
         "last_name": _field("Doe"),
-        "intended_sport": _field("Soccer"),  # discovered (not in card_fields)
     })
     client = _make_client(response)
 
@@ -155,9 +153,6 @@ def test_process_card_sends_prompt_and_image_and_parses(tmp_path, stub_genai):
     # configured fields present
     assert result["fields"]["first_name"]["value"] == "Jane"
     assert result["fields"]["last_name"]["value"] == "Doe"
-    # discovered field reported and present
-    assert result["discovered_keys"] == ["intended_sport"]
-    assert "intended_sport" in result["fields"]
 
 
 def test_process_card_unwraps_wrapped_envelope(tmp_path, stub_genai):

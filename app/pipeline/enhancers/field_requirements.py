@@ -6,6 +6,33 @@ from app.pipeline.enhancers.base import FieldEnhancer
 from app.pipeline.models import FieldData, PipelineContext
 from app.services.settings_service import apply_field_requirements
 from app.utils.retry_utils import log_debug
+from app.pipeline.enhancers.canonical_field_mapper import FIELD_ALIASES
+
+# Keys the pipeline itself produces, kept even when a school doesn't list them
+SYSTEM_FIELD_KEYS = {
+    "first_name",
+    "last_name",
+    "mapped_major",
+    "ceeb_code",
+    "high_school_validation",
+}
+
+
+def drop_unconfigured_fields(fields: Dict[str, FieldData], field_requirements: Dict) -> Dict[str, FieldData]:
+    """
+    Keep only fields the school has configured (plus system keys). The school's
+    card_fields list is the source of truth for which fields exist; anything
+    else the extractor returns is discarded rather than saved.
+    """
+    allowed = set(SYSTEM_FIELD_KEYS)
+    for key in field_requirements:
+        allowed.add(key)
+        allowed.add(FIELD_ALIASES.get(key.lower(), key))
+
+    dropped = [key for key in fields if key not in allowed]
+    if dropped:
+        log_debug("Dropped unconfigured fields", {"keys": dropped}, service="pipeline")
+    return {key: value for key, value in fields.items() if key in allowed}
 
 
 class FieldRequirementsEnhancer(FieldEnhancer):
@@ -39,7 +66,12 @@ class FieldRequirementsEnhancer(FieldEnhancer):
         
         # Convert back to FieldData format
         fields = self._convert_from_legacy_format(enhanced_fields, fields)
-        
+
+        # Universal cards write extra keys to the students table, so only
+        # school-specific cards are held to the configured field list.
+        if not context.metadata.get("serial_number"):
+            fields = drop_unconfigured_fields(fields, context.field_requirements)
+
         # Log what changed
         enabled_count = sum(1 for f in fields.values() if f.enabled)
         required_count = sum(1 for f in fields.values() if f.required)
