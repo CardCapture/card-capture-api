@@ -212,6 +212,40 @@ def get_frontend_url():
     else:
         return 'http://localhost:3000'
 
+def _ensure_invited_auth_user(supabase_client, email: str, metadata: dict):
+    """
+    Create the invited user's auth account (no password yet) so they appear on
+    the team right away, matching what Supabase's invite used to do. Returns the
+    user id, or the existing user's id if they're already registered.
+    """
+    try:
+        response = supabase_client.auth.admin.create_user({
+            "email": email,
+            "user_metadata": metadata,
+        })
+        return response.user.id
+    except Exception as e:
+        if "already been registered" not in str(e):
+            raise
+        existing = (
+            supabase_client.table("profiles").select("id").ilike("email", email).limit(1).execute()
+        )
+        if existing.data:
+            return existing.data[0]["id"]
+        raise
+
+
+def get_school_name_db(supabase_client, school_id: str):
+    if not school_id:
+        return None
+    try:
+        result = supabase_client.table("schools").select("name").eq("id", school_id).maybe_single().execute()
+        return result.data.get("name") if result and result.data else None
+    except Exception as e:
+        log_debug(f"Could not look up school name for invite email: {e}", service="auth")
+        return None
+
+
 def send_magic_link_email_db(supabase_client, email: str, link_type: str, metadata: dict = None):
     """Create magic link and send email"""
     log_debug(f"📧 Sending magic link email to: {mask_email(email)} (type: {link_type})", service="auth")
@@ -250,14 +284,24 @@ def send_magic_link_email_db(supabase_client, email: str, link_type: str, metada
             log_debug(f"✅ Password reset email sent to: {mask_email(email)}", service="auth")
             return {"success": True, "magic_url": magic_url, "token": token}
         elif link_type == "invite":
-            # Use Supabase's invite but redirect to our magic link handler
-            response = supabase_client.auth.admin.invite_user_by_email(
+            # Don't use Supabase's invite email: its link is one-time and email
+            # security scanners (Microsoft Safe Links) open it before the user
+            # does, leaving them with no session. Create the account ourselves
+            # and send our own link, which is only consumed on password setup.
+            user_id = _ensure_invited_auth_user(supabase_client, email, metadata or {})
+
+            from app.services.notification_service import NotificationService
+            sent = NotificationService().send_team_invite_email(
                 email,
-                options={
-                    "data": metadata or {},
-                    "redirect_to": magic_url
-                }
+                magic_url,
+                first_name=(metadata or {}).get("first_name"),
+                school_name=get_school_name_db(supabase_client, (metadata or {}).get("school_id")),
             )
+            if not sent:
+                raise Exception("Failed to send invite email")
+
+            log_debug(f"✅ Invite email sent to: {mask_email(email)}", service="auth")
+            return {"success": True, "magic_url": magic_url, "token": token, "user_id": user_id}
         else:
             # For other types, we'll need to implement custom email sending
             # For now, just return the URL

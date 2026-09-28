@@ -59,15 +59,13 @@ def invite_user_db(email: str, first_name: str, last_name: str, role: List[str],
         if not magic_link_response.get("success"):
             raise Exception("Failed to send magic link invite email")
         
-        # Check if user already exists in Supabase auth
-        user_response = get_supabase_client().auth.admin.list_users()
+        # The invite creates (or finds) the auth user and returns its id. Look it
+        # up directly; list_users() only returns the first page of users.
         existing_user = None
-        
-        for u in user_response:
-            if u.email == email:
-                existing_user = u
-                break
-        
+        invited_user_id = magic_link_response.get("user_id")
+        if invited_user_id:
+            existing_user = get_supabase_client().auth.admin.get_user_by_id(invited_user_id).user
+
         # If user doesn't exist yet, create a placeholder response
         if not existing_user:
             # Create a temporary user record for tracking

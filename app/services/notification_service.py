@@ -1615,6 +1615,100 @@ class NotificationService:
         </html>
         """
 
+    def send_team_invite_email(
+        self,
+        email: str,
+        invite_url: str,
+        first_name: Optional[str] = None,
+        school_name: Optional[str] = None,
+    ) -> bool:
+        """
+        Send branded team invite email via Resend.
+
+        The link points at our /magic-link page, which only validates the token;
+        it is consumed when the user sets a password. Email security scanners
+        (e.g. Microsoft Safe Links) that open the link therefore can't use it up,
+        unlike Supabase's one-time invite link.
+        """
+        if not self.resend_api_key:
+            log_debug("Resend API key not configured, skipping team invite email", service="notifications")
+            return False
+
+        try:
+            html_content = self._build_team_invite_email(invite_url, first_name, school_name)
+            subject = f"You're invited to join {school_name} on CardCapture" if school_name else "You're invited to CardCapture"
+
+            params = {
+                "from": "CardCapture <no-reply@cardcapture.io>",
+                "to": [email],
+                "subject": subject,
+                "html": html_content
+            }
+
+            response = resend.Emails.send(params)
+            log_debug(
+                f"Team invite email sent to {email}. Response ID: {response.get('id', 'unknown')}",
+                service="notifications"
+            )
+            return True
+
+        except Exception as e:
+            log_debug(f"Failed to send team invite email: {str(e)}", service="notifications")
+            return False
+
+    def _build_team_invite_email(
+        self, invite_url: str, first_name: Optional[str], school_name: Optional[str]
+    ) -> str:
+        """Build HTML email for a team invite."""
+        logo_url = "https://assets.cardcapture.io/storage/v1/object/public/assets/cc-logo-transparent-min.png"
+        current_year = datetime.now().year
+        greeting = f"Hi {first_name}," if first_name else "Hi,"
+        team = f"the {school_name} team" if school_name else "your team"
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+            <div style="background-color: white; border-radius: 8px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <div style="text-align: center; margin-bottom: 24px;">
+                    <img src="{logo_url}" alt="CardCapture" style="max-width: 180px; height: auto;">
+                </div>
+
+                <h2 style="color: #1f2937; margin-bottom: 16px;">You're invited to CardCapture</h2>
+
+                <p style="color: #4b5563; line-height: 1.6;">
+                    {greeting}
+                </p>
+                <p style="color: #4b5563; line-height: 1.6;">
+                    You've been added to {team} on CardCapture. Click the button below to set your password and finish setting up your account.
+                </p>
+
+                <div style="text-align: center; margin: 32px 0;">
+                    <a href="{invite_url}"
+                       style="background-color: #2563eb; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
+                        Accept Invitation
+                    </a>
+                </div>
+
+                <p style="color: #6b7280; font-size: 14px; line-height: 1.6;">
+                    This link will expire in 24 hours. If it expires, ask your administrator to send a new invitation.
+                </p>
+
+                <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
+
+                <p style="color: #9ca3af; font-size: 12px; text-align: center;">
+                    Questions? Contact support@cardcapture.io<br>
+                    &copy; {current_year} CardCapture. All rights reserved.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+
 
 # Convenience function for edge function
 def process_notifications():

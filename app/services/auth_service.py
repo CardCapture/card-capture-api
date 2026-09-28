@@ -10,7 +10,8 @@ from app.repositories.auth_repository import (
     consume_magic_link_db,
     create_magic_link_db,
     create_temporary_session_db,
-    get_frontend_url
+    get_frontend_url,
+    get_school_name_db,
 )
 from app.utils.retry_utils import log_debug
 
@@ -83,6 +84,15 @@ async def validate_magic_link_service(token: str):
             raise HTTPException(status_code=400, detail="Invalid or expired magic link")
         
         log_debug(f"Magic link validated for: {magic_link['email']}", service="auth")
+
+        # The invitee has no session yet, so include the school name here; the
+        # accept-invite page can't call the authenticated school endpoint.
+        if magic_link.get("type") == "invite":
+            metadata = magic_link.get("metadata") or {}
+            school_name = get_school_name_db(get_supabase_client(), metadata.get("school_id"))
+            if school_name:
+                magic_link["metadata"] = {**metadata, "school_name": school_name}
+
         return magic_link
         
     except HTTPException:
@@ -263,19 +273,21 @@ async def create_user_service(payload: dict):
         
         log_debug(f"Creating/updating user account for: {email}", service="auth")
 
-        # Check if user already exists (supabase_client already initialized above)
+        # Check if user already exists. Invites create the auth account up front,
+        # so this is the usual path. Look up by profile (id == auth user id)
+        # rather than list_users(), which only returns the first page of users.
         existing_user = None
         try:
-            auth_users = get_supabase_client().auth.admin.list_users()
-            for user in auth_users:
-                if user.email == email:
-                    existing_user = user
-                    break
-        except Exception as list_error:
-            log_debug(f"Error checking existing users: {str(list_error)}", service="auth")
-        
+            profile_match = (
+                supabase_client.table("profiles").select("id").ilike("email", email).limit(1).execute()
+            )
+            if profile_match.data:
+                existing_user = get_supabase_client().auth.admin.get_user_by_id(profile_match.data[0]["id"]).user
+        except Exception as lookup_error:
+            log_debug(f"Error checking existing users: {str(lookup_error)}", service="auth")
+
         user_id = None
-        
+
         if existing_user:
             # User exists - update their password and info
             log_debug(f"User {email} already exists, updating password and profile", service="auth")
@@ -312,22 +324,7 @@ async def create_user_service(payload: dict):
                 
             except Exception as create_error:
                 log_debug(f"User creation error: {str(create_error)}", service="auth")
-                # Check if the error is about existing user (race condition)
-                if "already been registered" in str(create_error):
-                    log_debug("User was created by another process, trying to find them", service="auth")
-                    # Try to find the user that was just created
-                    try:
-                        auth_users = get_supabase_client().auth.admin.list_users()
-                        for user in auth_users:
-                            if user.email == email:
-                                user_id = user.id
-                                log_debug(f"Found newly created user: {user_id}", service="auth")
-                                break
-                    except:
-                        pass
-                
-                if not user_id:
-                    raise HTTPException(status_code=500, detail=f"Failed to create or find user: {str(create_error)}")
+                raise HTTPException(status_code=500, detail=f"Failed to create user: {str(create_error)}")
         
         # Create/update profile record
         try:
