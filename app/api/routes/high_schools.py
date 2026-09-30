@@ -2,6 +2,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Dict, Any, Optional
 from app.repositories.high_schools_repository import HighSchoolsRepository
+from app.core.signup_region import signup_state_search_order
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +13,8 @@ high_schools_repo = HighSchoolsRepository()
 async def search_high_schools(
     q: str = Query(..., min_length=2, description="Search query (minimum 2 characters)"),
     limit: int = Query(10, ge=1, le=50, description="Maximum number of results"),
-    state: Optional[str] = Query(None, description="Filter by state (2-letter code)")
+    state: Optional[str] = Query(None, description="Filter by state (2-letter code)"),
+    signup: bool = Query(False, description="Sign-up sheet row: prefer the region, then search nationwide")
 ) -> Dict[str, Any]:
     """
     Search high schools by name
@@ -20,11 +22,18 @@ async def search_high_schools(
     Returns a list of schools matching the search query.
     """
     try:
-        results = high_schools_repo.search_schools(
-            query=q,
-            limit=limit,
-            state=state
-        )
+        if signup:
+            results = high_schools_repo.search_schools_preferring(
+                query=q,
+                preferred_states=signup_state_search_order(state),
+                limit=limit
+            )
+        else:
+            results = high_schools_repo.search_schools(
+                query=q,
+                limit=limit,
+                state=state
+            )
         
         return {
             "query": q,

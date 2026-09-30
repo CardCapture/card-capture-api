@@ -5,6 +5,7 @@ from typing import Dict, Optional
 from app.pipeline.enhancers.base import FieldEnhancer
 from app.pipeline.models import FieldData, PipelineContext
 from app.services.enhanced_high_school_matching_service import EnhancedHighSchoolMatchingService
+from app.core.signup_region import signup_state_search_order
 from app.utils.retry_utils import log_debug
 
 
@@ -59,9 +60,15 @@ class HighSchoolMatcherEnhancer(FieldEnhancer):
         
         try:
             # Run the enhanced matching service with location context
+            # Sign-up sheets have no reliable state; prefer the school's region
+            preferred_states = None
+            if context.metadata.get("source") == "signup_sheet":
+                preferred_states = signup_state_search_order(location_context.get("state"))
+
             validated_fields = self.matcher.validate_and_enhance_high_school_with_location(
                 self._convert_to_legacy_format(fields),
-                confidence_threshold=0.85
+                confidence_threshold=0.85,
+                preferred_states=preferred_states
             )
             
             # Convert back to new format and extract results

@@ -4,7 +4,8 @@ Address validation enhancer - validates and enriches address fields with Google 
 from typing import Dict, Optional
 from app.pipeline.enhancers.base import FieldEnhancer
 from app.pipeline.models import FieldData, PipelineContext
-from app.services.address_validation_service import validate_address
+from app.services.address_validation_service import AddressValidationResult, validate_address
+from app.core.signup_region import SIGNUP_HOME_STATE, SIGNUP_PREFERRED_STATES
 from app.utils.retry_utils import log_debug
 
 
@@ -40,8 +41,11 @@ class AddressValidationEnhancer(FieldEnhancer):
         
         # Validate with Google Maps
         log_debug(f"Validating address: {address}, {city}, {state} {zip_code}", service="pipeline")
-        result = validate_address(address, city, state, zip_code)
-        
+        if context.metadata.get("source") == "signup_sheet" and not (city or state or zip_code):
+            result = self._validate_signup_street(address)
+        else:
+            result = validate_address(address, city, state, zip_code)
+
         # Process based on validation state
         if result.state == "verified":
             # Perfect match - update fields with verified data
@@ -71,6 +75,22 @@ class AddressValidationEnhancer(FieldEnhancer):
         
         return fields
     
+    def _validate_signup_street(self, address: str) -> AddressValidationResult:
+        """
+        Sign-up sheets usually give only a street, which Google can match to the
+        same street name anywhere (even another country). Try it in the home
+        state first, then unhinted, and only accept a result in the preferred
+        region. Otherwise leave city/state blank for the reviewer.
+        """
+        for hint_state in (SIGNUP_HOME_STATE, ""):
+            result = validate_address(address, "", hint_state, "")
+            suggested_state = ((result.suggestion or {}).get("state") or "").upper()
+            if suggested_state in SIGNUP_PREFERRED_STATES:
+                return result
+
+        log_debug(f"No sign-up address match in the expected region for: {address}", service="pipeline")
+        return AddressValidationResult(state="not_verified", error="No match in the expected region")
+
     def _get_field_value(self, fields: Dict[str, FieldData], key: str) -> str:
         """Safely get field value"""
         if key in fields and fields[key].value:

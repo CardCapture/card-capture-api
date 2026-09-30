@@ -248,7 +248,8 @@ class EnhancedHighSchoolMatchingService:
         self, 
         school_name: str, 
         fields: Dict[str, Any],
-        confidence_threshold: float = 0.8
+        confidence_threshold: float = 0.8,
+        preferred_states: Optional[List[str]] = None
     ) -> Tuple[Optional[Dict[str, Any]], float, List[Dict[str, Any]]]:
         """
         Find the best matching school using location context from student fields
@@ -283,12 +284,21 @@ class EnhancedHighSchoolMatchingService:
             # Search for schools with location context prioritization
             search_state = student_location.get('state') if student_location else None
             search_city = student_location.get('city') if student_location else None
-            candidates = self.repo.search_schools(
-                query=school_name,
-                limit=100,  # Increase limit for location-based filtering
-                state=search_state,
-                city=search_city  # Pass city for location-first search
-            )
+            if preferred_states:
+                # Sign-up sheets: no reliable state, so search the preferred
+                # region first, then nationwide
+                candidates = self.repo.search_schools_preferring(
+                    query=school_name,
+                    preferred_states=preferred_states,
+                    limit=100,
+                )
+            else:
+                candidates = self.repo.search_schools(
+                    query=school_name,
+                    limit=100,  # Increase limit for location-based filtering
+                    state=search_state,
+                    city=search_city  # Pass city for location-first search
+                )
             
             if not candidates:
                 log_debug("No candidates found", service="enhanced_high_school_matching")
@@ -386,7 +396,8 @@ class EnhancedHighSchoolMatchingService:
     def validate_and_enhance_high_school_with_location(
         self,
         fields: Dict[str, Any],
-        confidence_threshold: float = 0.85
+        confidence_threshold: float = 0.85,
+        preferred_states: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Enhanced validation using location context
@@ -412,7 +423,8 @@ class EnhancedHighSchoolMatchingService:
         best_match, confidence, alternatives = self.find_best_match_with_location(
             high_school_name,
             fields,
-            confidence_threshold=confidence_threshold
+            confidence_threshold=confidence_threshold,
+            preferred_states=preferred_states
         )
         
         # Initialize ceeb_code field if not exists

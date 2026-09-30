@@ -178,6 +178,56 @@ class HighSchoolsRepository:
             log_debug(f"Error searching high schools: {str(e)}", service="high_schools")
             raise
     
+    def search_schools_preferring(
+        self, query: str, preferred_states: List[str], limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Name search that tries states in order, then falls back nationwide.
+
+        Used for sign-up sheet rows, which usually have no reliable state. Every
+        tier is a plain "name contains the query" match, so typing part of a
+        name ("Pass Christian") finds the full name ("Pass Christian High
+        School"). search_schools() is unchanged for inquiry cards.
+        """
+        normalized_query = self.normalize_text(query)
+        columns = "id, name, city, state, phone, website, district_name, school_type, level, ceeb_code, source"
+        results: List[Dict[str, Any]] = []
+        seen_ids = set()
+
+        def add(rows):
+            for row in rows or []:
+                if row["id"] not in seen_ids:
+                    seen_ids.add(row["id"])
+                    results.append(row)
+
+        for state in preferred_states:
+            if len(results) >= limit:
+                break
+            try:
+                rows = (
+                    self.client.table(self.table).select(columns)
+                    .eq("state", state.upper()).ilike("name", f"%{normalized_query}%")
+                    .limit(limit).execute().data
+                )
+                add(rows)
+            except Exception as e:
+                log_debug(f"Preferred-state search failed for {state}: {e}", service="high_schools")
+
+        if len(results) < limit:
+            try:
+                from difflib import SequenceMatcher
+
+                rows = (
+                    self.client.table(self.table).select(columns)
+                    .ilike("name", f"%{normalized_query}%").limit(limit * 5).execute().data or []
+                )
+                rows.sort(key=lambda r: -SequenceMatcher(None, r["name"].lower(), normalized_query.lower()).ratio())
+                add(rows)
+            except Exception as e:
+                log_debug(f"Nationwide fallback search failed: {e}", service="high_schools")
+
+        return results[:limit]
+
     def get_school_by_id(self, school_id: str) -> Optional[Dict[str, Any]]:
         """Get a single school by ID"""
         try:
