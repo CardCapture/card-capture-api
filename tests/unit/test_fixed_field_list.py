@@ -66,6 +66,37 @@ def test_enhancer_leaves_universal_cards_alone():
     assert "entry_term" in result
 
 
+def test_default_fills_blank_field_but_not_a_real_value():
+    requirements = {
+        "first_name": {"enabled": True, "required": True},
+        "student_type": {"enabled": True, "required": False, "default": "Freshman"},
+    }
+    blank = FieldRequirementsEnhancer().enhance(_fields(["first_name"]), _context_with(requirements))
+    assert blank["student_type"].value == "Freshman"
+
+    fields = _fields(["first_name"])
+    fields["student_type"] = FieldData(value="Transfer")
+    kept = FieldRequirementsEnhancer().enhance(fields, _context_with(requirements))
+    assert kept["student_type"].value == "Transfer"
+
+
+def test_signup_sheets_use_card_fields_requirements():
+    import asyncio
+    from unittest.mock import patch
+    from app.services import signup_service
+
+    with patch("app.services.settings_service.get_field_requirements", return_value=REQUIREMENTS) as card_reqs:
+        assert asyncio.run(signup_service.get_field_requirements("school")) == REQUIREMENTS
+    card_reqs.assert_called_once_with("school")
+
+
+def _context_with(requirements):
+    return PipelineContext(
+        school_id="school", user_id="user", event_id=None, image_path="card.jpg",
+        field_requirements=requirements,
+    )
+
+
 def test_prompt_forbids_new_keys_and_includes_hints():
     card_fields = [
         {"key": "intended_sport", "enabled": True, "field_type": "text", "card_label": "What sport do you play?"},

@@ -7,6 +7,7 @@ from app.controllers.users_controller import (
     delete_user_controller
 )
 from app.core.auth import get_current_user
+from app.core.clients import get_supabase_client
 from app.models.user import UserUpdateRequest  # Adjust import if needed
 from app.utils.authorization import is_superadmin
 from app.utils.retry_utils import log_debug
@@ -120,21 +121,42 @@ async def update_user(user_id: str, update: UserUpdateRequest, user=Depends(get_
     Update a user's profile.
 
     SECURITY:
-    - Users can only update their own profile
     - SuperAdmins can update any user
+    - School admins can update users in their own school, including roles
+    - Other users can update their own name, but not their roles
     """
     current_user_id = user.get("id")
 
-    # Users can only update their own profile unless they're SuperAdmin
-    if not is_superadmin(user) and str(user_id) != str(current_user_id):
-        log_debug(
-            f"Access denied: User {current_user_id} tried to update user {user_id}",
-            service="users"
+    if not is_superadmin(user):
+        target = (
+            get_supabase_client().table("profiles").select("school_id, role")
+            .eq("id", user_id).maybe_single().execute()
         )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: You can only update your own profile"
-        )
+        if not target or not target.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+        is_admin = "admin" in (user.get("role") or [])
+        same_school = str(target.data.get("school_id")) == str(user.get("school_id"))
+        is_self = str(user_id) == str(current_user_id)
+
+        if is_admin and same_school:
+            pass
+        elif is_self:
+            if sorted(update.role or []) != sorted(target.data.get("role") or []):
+                log_debug(f"Access denied: User {current_user_id} tried to change their own roles", service="users")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only an admin can change roles"
+                )
+        else:
+            log_debug(
+                f"Access denied: User {current_user_id} tried to update user {user_id}",
+                service="users"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only an admin in this user's school can update them"
+            )
 
     return await update_user_controller(user_id, update)
 

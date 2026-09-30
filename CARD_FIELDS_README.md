@@ -27,6 +27,8 @@ The review form and exports are built from the same list.
 - `options`: required for `select`; rendered as a dropdown in review.
 - `extract: false` (optional): review-only field that isn't on the card. It is left
   out of the extraction prompt and shows up blank for the reviewer to fill in.
+- `default` (optional): value filled in when the card or sign-up row leaves the
+  field blank. Applied by the pipeline, never guessed by the model.
 
 ## Adding a field for a school
 
@@ -36,11 +38,12 @@ set card_fields = card_fields || '[{"key":"intended_sport","label":"Intended Spo
 where id = '<school_id>';
 ```
 
-Review-only dropdown (e.g. Student Type when the card has no checkbox):
+Review-only dropdown that defaults to Freshman (e.g. Student Type when the card
+has no checkbox):
 
 ```sql
 update schools
-set card_fields = card_fields || '[{"key":"student_type","label":"Student Type","field_type":"select","options":["Freshman","Transfer"],"extract":false,"enabled":true,"required":false}]'::jsonb
+set card_fields = card_fields || '[{"key":"student_type","label":"Student Type","field_type":"select","options":["Freshman","Transfer"],"extract":false,"default":"Freshman","enabled":true,"required":false}]'::jsonb
 where id = '<school_id>';
 ```
 

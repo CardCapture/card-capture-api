@@ -717,30 +717,13 @@ async def _enhance_single_batch(
 
 async def get_field_requirements(school_id: str) -> Dict[str, Any]:
     """
-    Fetch field requirements for a school.
-
-    Args:
-        school_id: School ID
-
-    Returns:
-        Dictionary of field requirements
+    Fetch field requirements for a school from its card_fields, the same source
+    the card pipeline uses. (This used to read a `settings` table that doesn't
+    exist, so sign-up sheets silently ran with no requirements.)
     """
-    try:
-        supabase_client = get_supabase_client()
+    from app.services.settings_service import get_field_requirements as get_card_field_requirements
 
-        # Query settings table for this school's field requirements
-        settings_query = supabase_client.table("settings").select("field_requirements").eq("school_id", school_id).maybe_single().execute()
-
-        if settings_query.data and settings_query.data.get("field_requirements"):
-            return settings_query.data.get("field_requirements", {})
-
-        # Default empty requirements if not configured
-        return {}
-
-    except Exception as e:
-        log_debug(f"Failed to fetch field requirements: {str(e)}", service="signup")
-        # Return empty dict on error - pipeline will use defaults
-        return {}
+    return get_card_field_requirements(school_id)
 
 
 async def create_reviewed_data_from_pipeline_result(

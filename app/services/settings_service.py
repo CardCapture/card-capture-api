@@ -23,7 +23,11 @@ def get_field_requirements(school_id: str) -> Dict[str, Dict[str, bool]]:
             filtered_card_fields_array = [f for f in card_fields_array if f["key"] not in combined_fields]
             
             # Convert array to dict for internal use
-            card_fields = {f["key"]: {"enabled": f.get("enabled", True), "required": f.get("required", False)} for f in filtered_card_fields_array}
+            card_fields = {}
+            for f in filtered_card_fields_array:
+                card_fields[f["key"]] = {"enabled": f.get("enabled", True), "required": f.get("required", False)}
+                if f.get("default"):
+                    card_fields[f["key"]]["default"] = f["default"]
             
             log_debug("Found school settings (after filtering combined fields)", card_fields, service="settings")
             if len(card_fields_array) != len(filtered_card_fields_array):

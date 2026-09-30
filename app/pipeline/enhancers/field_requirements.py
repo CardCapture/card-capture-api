@@ -18,6 +18,26 @@ SYSTEM_FIELD_KEYS = {
 }
 
 
+def apply_field_defaults(fields: Dict[str, FieldData], field_requirements: Dict) -> Dict[str, FieldData]:
+    """
+    Fill blank fields with the school's configured default (e.g. student_type
+    "Freshman" for a card with no student type box). Plain config, never the LLM.
+    """
+    for key, settings in field_requirements.items():
+        default = settings.get("default") if isinstance(settings, dict) else None
+        if not default or not settings.get("enabled", True):
+            continue
+        field = fields.get(key)
+        if field is None:
+            fields[key] = FieldData(value=default, confidence=1.0, source="default")
+        elif not (field.value or "").strip():
+            field.value = default
+            field.source = "default"
+            field.requires_human_review = False
+            field.review_notes = ""
+    return fields
+
+
 def drop_unconfigured_fields(fields: Dict[str, FieldData], field_requirements: Dict) -> Dict[str, FieldData]:
     """
     Keep only fields the school has configured (plus system keys). The school's
@@ -71,6 +91,8 @@ class FieldRequirementsEnhancer(FieldEnhancer):
         # school-specific cards are held to the configured field list.
         if not context.metadata.get("serial_number"):
             fields = drop_unconfigured_fields(fields, context.field_requirements)
+
+        fields = apply_field_defaults(fields, context.field_requirements)
 
         # Log what changed
         enabled_count = sum(1 for f in fields.values() if f.enabled)
